@@ -31,22 +31,40 @@ ENTRY_SERVICE = "entry.1966683913"
 
 async def send_to_google_form(name, phone, date_str, time_str, service):
     try:
+        # Преобразуем дату из YYYY-MM-DD → ДД.ММ.ГГГГ
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        date_fmt = date_obj.strftime("%d.%m.%Y")
+
+        # Преобразуем время в формат HH:MM
+        time_obj = datetime.strptime(time_str, "%H:%M")
+        time_fmt = time_obj.strftime("%H:%M")
+
         form_data = {
             ENTRY_NAME: name.strip(),
             ENTRY_PHONE: phone.strip(),
-            ENTRY_DATE: date_str.strip(),
-            ENTRY_TIME: time_str.strip(),
-            ENTRY_SERVICE: service.strip()
+            ENTRY_DATE: date_fmt,
+            ENTRY_TIME: time_fmt,
+            ENTRY_SERVICE: service.strip(),
+            "fvv": "1",
+            "draftResponse": [],
+            "pageHistory": "0"
         }
+
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Mozilla/5.0",
+            "Referer": FORM_URL.replace("formResponse", "viewform")
+        }
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(FORM_URL, data=form_data) as resp:
+            async with session.post(FORM_URL, data=form_data, headers=headers) as resp:
                 text = await resp.text()
                 if resp.status in (200, 302):
-                    print("✅ Данные отправлены в Google Form")
+                    print("✅ Данные успешно отправлены в Google Form")
                 else:
                     print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
     except Exception as e:
-        print(f"⚠️ Исключение при отправке в Google Form: {e}")
+        print(f"❌ Ошибка при отправке в Google Form: {e}")
 
 # === FSM ===
 TIMEZONE = pytz.timezone("Asia/Almaty")
@@ -178,7 +196,7 @@ async def time(cb: CallbackQuery, state: FSMContext):
 
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     date_fmt = date_obj.strftime("%d.%m")
-    await cb.message.edit_text(
+        await cb.message.edit_text(
         f"✅ Запись подтверждена!\n\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}\n📍 Аягоз, ул. Актамберды, 23"
     )
     await bot.send_message(
