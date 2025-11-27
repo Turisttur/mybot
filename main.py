@@ -21,7 +21,13 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
 # === Google Form настройки ===
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+import aiohttp
+from urllib.parse import quote_plus
+
+# ✅ ТОЛЬКО formResponse URL (не viewform!)
+FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+
+# Получите актуальные entry-ID через «Предзаполненную ссылку» (см. выше)
 ENTRY_NAME = "entry.929095536"
 ENTRY_PHONE = "entry.1802722855"
 ENTRY_DATE = "entry.1964769702"
@@ -30,22 +36,41 @@ ENTRY_SERVICE = "entry.1966683913"
 
 async def send_to_google_form(name, phone, date_str, time_str, service):
     try:
+        # ✅ Формируем form-encoded данные (НЕ JSON!)
         form_data = {
-            ENTRY_NAME: name,
-            ENTRY_PHONE: phone,
-            ENTRY_DATE: date_str,
-            ENTRY_TIME: time_str,
-            ENTRY_SERVICE: service
+            f"entry.{ENTRY_NAME}": name,
+            f"entry.{ENTRY_PHONE}": phone,
+            f"entry.{ENTRY_DATE}": date_str,   # "2025-11-27"
+            f"entry.{ENTRY_TIME}": time_str,   # "15:00"
+            f"entry.{ENTRY_SERVICE}": service,
+            "draftResponse": [],
+            "pageHistory": 0,
         }
+
+        # ✅ Добавляем заголовки как из браузера
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(FORM_URL, data=form_data) as resp:
+            async with session.post(
+                FORM_RESPONSE_URL,
+                data=form_data,  # ← data=, не json=
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 text = await resp.text()
-                if resp.status in (200, 302):  # Google Forms часто возвращает 200 или 302
-                    print("✅ Данные отправлены в Google Form")
+                if resp.status == 200 and "formResponse" in text:
+                    print("✅ Успешно: запись добавлена в Google Таблицу")
                 else:
-                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
+                    print(f"⚠️ Google Form 400: {resp.status}")
+                    # Раскомментируйте для отладки:
+                    # print("Ответ:", text[:500])
     except Exception as e:
-        print(f"⚠️ Исключение при отправке в Google Form: {e}")
+        print(f"❌ send_to_google_form error: {e}")
+
 
 # === FSM ===
 TIMEZONE = pytz.timezone("Asia/Almaty")
