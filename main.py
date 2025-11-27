@@ -21,18 +21,6 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
 # === Google Form настройки ===
-import aiohttp
-from urllib.parse import quote_plus
-
-# ✅ ТОЛЬКО formResponse URL (не viewform!)
-FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
-
-# Получите актуальные entry-ID через «Предзаполненную ссылку» (см. выше)
-ENTRY_NAME = "entry.929095536"
-ENTRY_PHONE = "entry.1802722855"
-ENTRY_DATE = "entry.1964769702"
-ENTRY_TIME = "entry.1869005656"
-ENTRY_SERVICE = "entry.1966683913"
 
 import aiohttp
 from urllib.parse import quote_plus
