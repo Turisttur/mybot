@@ -29,42 +29,38 @@ ENTRY_DATE = "entry.1964769702"
 ENTRY_TIME = "entry.1869005656"
 ENTRY_SERVICE = "entry.1966683913"
 
-async def send_to_google_form(name, phone, date_str, time_str, service):
+import aiohttp
+import json
+
+# Вставьте ваш Web App URL:
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbytfO3MROLzqqCgE7JjdZZzoeUXPUYxLLR3VX25lBAtQCCr0Ca7vCM3Bs4dg6QrxfojXg/exec"
+
+async def send_to_web_app(name, phone, date_str, time_str, service):
     try:
-        # Преобразуем дату из YYYY-MM-DD → ДД.ММ.ГГГГ
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        date_fmt = date_obj.strftime("%d.%m.%Y")
-
-        # Преобразуем время в формат HH:MM
-        time_obj = datetime.strptime(time_str, "%H:%M")
-        time_fmt = time_obj.strftime("%H:%M")
-
-        form_data = {
-            ENTRY_NAME: name.strip(),
-            ENTRY_PHONE: phone.strip(),
-            ENTRY_DATE: date_fmt,
-            ENTRY_TIME: time_fmt,
-            ENTRY_SERVICE: service.strip(),
-            "fvv": "1",
-            "draftResponse": [],
-            "pageHistory": "0"
+        payload = {
+            "name": name.strip(),
+            "phone": phone.strip(),
+            "date": date_str,      # "2025-11-27"
+            "time": time_str,      # "11:47"
+            "service": service.strip()
         }
 
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Mozilla/5.0",
-            "Referer": FORM_URL.replace("formResponse", "viewform")
-        }
+        headers = {"Content-Type": "application/json"}
+        timeout = aiohttp.ClientTimeout(total=10)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(FORM_URL, data=form_data, headers=headers) as resp:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(WEB_APP_URL, json=payload, headers=headers) as resp:
                 text = await resp.text()
-                if resp.status in (200, 302):
-                    print("✅ Данные успешно отправлены в Google Form")
-                else:
-                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
+                try:
+                    result = json.loads(text)
+                    if "error" in result:
+                        print(f"⚠️ Web App error: {result['error']}")
+                    else:
+                        print("✅ Успешно: запись в Таблице")
+                except:
+                    print(f"⚠️ Не JSON: {text[:100]}")
     except Exception as e:
-        print(f"❌ Ошибка при отправке в Google Form: {e}")
+        print(f"❌ Web App exception: {e}")
 
 # === FSM ===
 TIMEZONE = pytz.timezone("Asia/Almaty")
@@ -204,6 +200,8 @@ async def time(cb: CallbackQuery, state: FSMContext):
         f"🆕 Новая запись!\n👤 {name}\n📱 {phone}\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}"
     )
     await state.clear()
+    # Внутри async def time(...):
+    await send_to_web_app(name, phone, date_str, tm, service)
 
 @dp.callback_query(F.data == "contact")
 async def contact(cb: CallbackQuery):
