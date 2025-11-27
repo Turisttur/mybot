@@ -188,7 +188,8 @@ async def time(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    await send_to_google_form(name, phone, date_str, tm, service)
+    # Отправляем данные только в Web App
+    await send_to_web_app(name, phone, date_str, tm, service)
 
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     date_fmt = date_obj.strftime("%d.%m")
@@ -200,8 +201,7 @@ async def time(cb: CallbackQuery, state: FSMContext):
         f"🆕 Новая запись!\n👤 {name}\n📱 {phone}\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}"
     )
     await state.clear()
-    # Внутри async def time(...):
-    await send_to_web_app(name, phone, date_str, tm, service)
+
 
 @dp.callback_query(F.data == "contact")
 async def contact(cb: CallbackQuery):
