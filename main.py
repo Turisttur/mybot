@@ -196,7 +196,7 @@ async def time(cb: CallbackQuery, state: FSMContext):
 
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     date_fmt = date_obj.strftime("%d.%m")
-        await cb.message.edit_text(
+    await cb.message.edit_text(
         f"✅ Запись подтверждена!\n\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}\n📍 Аягоз, ул. Актамберды, 23"
     )
     await bot.send_message(
