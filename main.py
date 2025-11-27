@@ -24,43 +24,70 @@ app = FastAPI()
 
 import aiohttp
 from urllib.parse import quote_plus
+import re
 
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
 
+# Укажите ваши актуальные entry-ID
 ENTRY_NAME = "entry.929095536"
 ENTRY_PHONE = "entry.1802722855"
 ENTRY_DATE = "entry.1964769702"
 ENTRY_TIME = "entry.1869005656"
 ENTRY_SERVICE = "entry.1966683913"
 
+FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+
 async def send_to_google_form(name, phone, date_str, time_str, service):
     try:
-        # ✅ Кодируем значения
+        # 🔹 1. Формат даты: "2025-11-27" → "27.11.2025"
+        date_parts = re.findall(r'\d+', date_str)
+        if len(date_parts) >= 3:
+            # Определяем: YYYY-MM-DD или DD-MM-YYYY?
+            if len(date_parts[0]) == 4:  # YYYY-MM-DD
+                year, month, day = date_parts[0], date_parts[1], date_parts[2]
+            else:  # DD-MM-YYYY или DD.MM.YYYY
+                day, month, year = date_parts[0], date_parts[1], date_parts[2]
+            date_for_form = f"{day}.{month}.{year}"
+        else:
+            date_for_form = date_str  # как есть
+
+        # 🔹 2. Формат времени: "11:47" → "11:47" (без секунд!)
+        time_clean = re.sub(r'[^\d:]', ':', time_str)
+        time_parts = time_clean.split(':')
+        if len(time_parts) >= 2:
+            time_for_form = f"{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}"
+        else:
+            time_for_form = time_str
+
+        # 🔹 3. Формируем данные
         form_data = {
-            ENTRY_NAME: quote_plus(name),
-            ENTRY_PHONE: quote_plus(phone),
-            ENTRY_DATE: quote_plus(date_str),
-            ENTRY_TIME: quote_plus(time_str),
-            ENTRY_SERVICE: quote_plus(service),
+            f"entry.{ENTRY_NAME}": str(name).strip(),
+            f"entry.{ENTRY_PHONE}": str(phone).strip(),
+            f"entry.{ENTRY_DATE}": date_for_form,   # ← "27.11.2025"
+            f"entry.{ENTRY_TIME}": time_for_form,   # ← "11:47"
+            f"entry.{ENTRY_SERVICE}": str(service).strip(),
             "draftResponse": [],
-            "pageHistory": 0
+            "pageHistory": 0,
         }
 
         headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Mozilla/5.0",
-            "Referer": FORM_URL.replace("formResponse", "viewform")
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform",
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(FORM_URL, data=form_data, headers=headers) as resp:
-                text = await resp.text()
-                if resp.status in (200, 302):
-                    print("✅ Данные успешно отправлены в Google Form")
+            async with session.post(
+                FORM_RESPONSE_URL,
+                data=form_data,
+                headers=headers,
+                timeout=10
+            ) as resp:
+                if resp.status == 200:
+                    print(f"✅ Запись: {name} ({date_for_form} {time_for_form}) → Таблица")
                 else:
-                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
+                    text = await resp.text()
+                    print(f"⚠️ HTTP {resp.status}. Ответ: {text[:200]}...")
     except Exception as e:
-        print(f"⚠️ Исключение при отправке в Google Form: {e}")
+        print(f"❌ send_to_google_form: {e}")
 
 
 # === FSM ===
