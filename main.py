@@ -27,48 +27,33 @@ from urllib.parse import quote_plus
 import re
 
 async def send_to_google_form(name, phone, date_str, time_str, service):
+    # 🔹 Форматируем как в предзаполненной ссылке
+    date_clean = re.sub(r'[^\d.]', '.', date_str)
+    time_clean = re.sub(r'[^\d:]', ':', time_str).split(':')
+    time_f = f"{time_clean[0].zfill(2)}:{time_clean[1].zfill(2)}" if len(time_clean) >= 2 else time_str
+
+    # 🔹 Генерируем URL как вручную
+    params = [
+        f"entry.929095536={quote_plus(name.strip())}",
+        f"entry.1802722855={quote_plus(phone.strip())}",
+        f"entry.1964769702={quote_plus(date_clean)}",      # дд.мм.гггг
+        f"entry.1869005656={quote_plus(time_f)}",           # чч:мм
+        f"entry.1966683913={quote_plus(service.strip())}",
+        "usp=pp_url"
+    ]
+
+    url = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform?" + "&".join(params)
+
     try:
-        # 🔹 Формат даты: "2025-11-27" → "27.11.2025"
-        d = re.findall(r'\d+', date_str)
-        if len(d) >= 3:
-            date_f = f"{d[2] if len(d[0])==4 else d[0]}.{d[1] if len(d[0])==4 else d[1]}.{d[0] if len(d[0])==4 else d[2]}"
-        else:
-            date_f = date_str
-
-        # 🔹 Время: "11:47:51" → "11:47"
-        t = re.sub(r'[^\d:]', ':', time_str).split(':')
-        time_f = f"{t[0].zfill(2)}:{t[1].zfill(2)}" if len(t) >= 2 else time_str
-
-        # 🔹 ТОЛЬКО formResponse URL
-        url = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
-
-        # 🔹 Данные как form-urlencoded (НЕ JSON!)
-        data = {
-            "entry.929095536": name.strip(),      # ← подставьте ваши ID
-            "entry.1802722855": phone.strip(),
-            "entry.1964769702": date_f,           # ← "27.11.2025"
-            "entry.1869005656": time_f,            # ← "11:47"
-            "entry.1966683913": service.strip(),
-            "draftResponse": "[]",
-            "pageHistory": "0",
-        }
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-
+        # 🔹 Делаем GET-запрос (не POST!)
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data, headers=headers, timeout=10) as resp:
-                if resp.status == 200 and "formResponse" in await resp.text():
-                    print("✅ Успешно: запись в Таблице")
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    print("✅ Успешно: запись в Таблице (GET)")
                 else:
                     print(f"⚠️ 400: {resp.status}")
-                    # Раскомментируйте для отладки:
-                    # print("Тело ответа:", (await resp.text())[:100])
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ GET error: {e}")
 
 
 # === FSM ===
