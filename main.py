@@ -26,68 +26,49 @@ import aiohttp
 from urllib.parse import quote_plus
 import re
 
-
-# Укажите ваши актуальные entry-ID
-ENTRY_NAME = "entry.929095536"
-ENTRY_PHONE = "entry.1802722855"
-ENTRY_DATE = "entry.1964769702"
-ENTRY_TIME = "entry.1869005656"
-ENTRY_SERVICE = "entry.1966683913"
-
-FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
-
 async def send_to_google_form(name, phone, date_str, time_str, service):
     try:
-        # 🔹 1. Формат даты: "2025-11-27" → "27.11.2025"
-        date_parts = re.findall(r'\d+', date_str)
-        if len(date_parts) >= 3:
-            # Определяем: YYYY-MM-DD или DD-MM-YYYY?
-            if len(date_parts[0]) == 4:  # YYYY-MM-DD
-                year, month, day = date_parts[0], date_parts[1], date_parts[2]
-            else:  # DD-MM-YYYY или DD.MM.YYYY
-                day, month, year = date_parts[0], date_parts[1], date_parts[2]
-            date_for_form = f"{day}.{month}.{year}"
+        # 🔹 Формат даты: "2025-11-27" → "27.11.2025"
+        d = re.findall(r'\d+', date_str)
+        if len(d) >= 3:
+            date_f = f"{d[2] if len(d[0])==4 else d[0]}.{d[1] if len(d[0])==4 else d[1]}.{d[0] if len(d[0])==4 else d[2]}"
         else:
-            date_for_form = date_str  # как есть
+            date_f = date_str
 
-        # 🔹 2. Формат времени: "11:47" → "11:47" (без секунд!)
-        time_clean = re.sub(r'[^\d:]', ':', time_str)
-        time_parts = time_clean.split(':')
-        if len(time_parts) >= 2:
-            time_for_form = f"{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}"
-        else:
-            time_for_form = time_str
+        # 🔹 Время: "11:47:51" → "11:47"
+        t = re.sub(r'[^\d:]', ':', time_str).split(':')
+        time_f = f"{t[0].zfill(2)}:{t[1].zfill(2)}" if len(t) >= 2 else time_str
 
-        # 🔹 3. Формируем данные
-        form_data = {
-            f"entry.{ENTRY_NAME}": str(name).strip(),
-            f"entry.{ENTRY_PHONE}": str(phone).strip(),
-            f"entry.{ENTRY_DATE}": date_for_form,   # ← "27.11.2025"
-            f"entry.{ENTRY_TIME}": time_for_form,   # ← "11:47"
-            f"entry.{ENTRY_SERVICE}": str(service).strip(),
-            "draftResponse": [],
-            "pageHistory": 0,
+        # 🔹 ТОЛЬКО formResponse URL
+        url = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+
+        # 🔹 Данные как form-urlencoded (НЕ JSON!)
+        data = {
+            "entry.929095536": name.strip(),      # ← подставьте ваши ID
+            "entry.1802722855": phone.strip(),
+            "entry.1964769702": date_f,           # ← "27.11.2025"
+            "entry.1869005656": time_f,            # ← "11:47"
+            "entry.1966683913": service.strip(),
+            "draftResponse": "[]",
+            "pageHistory": "0",
         }
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform",
+            "Content-Type": "application/x-www-form-urlencoded",
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                FORM_RESPONSE_URL,
-                data=form_data,
-                headers=headers,
-                timeout=10
-            ) as resp:
-                if resp.status == 200:
-                    print(f"✅ Запись: {name} ({date_for_form} {time_for_form}) → Таблица")
+            async with session.post(url, data=data, headers=headers, timeout=10) as resp:
+                if resp.status == 200 and "formResponse" in await resp.text():
+                    print("✅ Успешно: запись в Таблице")
                 else:
-                    text = await resp.text()
-                    print(f"⚠️ HTTP {resp.status}. Ответ: {text[:200]}...")
+                    print(f"⚠️ 400: {resp.status}")
+                    # Раскомментируйте для отладки:
+                    # print("Тело ответа:", (await resp.text())[:100])
     except Exception as e:
-        print(f"❌ send_to_google_form: {e}")
+        print(f"❌ Ошибка: {e}")
 
 
 # === FSM ===
