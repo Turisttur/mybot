@@ -34,42 +34,45 @@ ENTRY_DATE = "entry.1964769702"
 ENTRY_TIME = "entry.1869005656"
 ENTRY_SERVICE = "entry.1966683913"
 
+import aiohttp
+from urllib.parse import quote_plus
+
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+
+ENTRY_NAME = "entry.929095536"
+ENTRY_PHONE = "entry.1802722855"
+ENTRY_DATE = "entry.1964769702"
+ENTRY_TIME = "entry.1869005656"
+ENTRY_SERVICE = "entry.1966683913"
+
 async def send_to_google_form(name, phone, date_str, time_str, service):
     try:
-        # ✅ Формируем form-encoded данные (НЕ JSON!)
+        # ✅ Кодируем значения
         form_data = {
-            f"entry.{ENTRY_NAME}": name,
-            f"entry.{ENTRY_PHONE}": phone,
-            f"entry.{ENTRY_DATE}": date_str,   # "2025-11-27"
-            f"entry.{ENTRY_TIME}": time_str,   # "15:00"
-            f"entry.{ENTRY_SERVICE}": service,
+            ENTRY_NAME: quote_plus(name),
+            ENTRY_PHONE: quote_plus(phone),
+            ENTRY_DATE: quote_plus(date_str),
+            ENTRY_TIME: quote_plus(time_str),
+            ENTRY_SERVICE: quote_plus(service),
             "draftResponse": [],
-            "pageHistory": 0,
+            "pageHistory": 0
         }
 
-        # ✅ Добавляем заголовки как из браузера
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform",
             "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Mozilla/5.0",
+            "Referer": FORM_URL.replace("formResponse", "viewform")
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                FORM_RESPONSE_URL,
-                data=form_data,  # ← data=, не json=
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
+            async with session.post(FORM_URL, data=form_data, headers=headers) as resp:
                 text = await resp.text()
-                if resp.status == 200 and "formResponse" in text:
-                    print("✅ Успешно: запись добавлена в Google Таблицу")
+                if resp.status in (200, 302):
+                    print("✅ Данные успешно отправлены в Google Form")
                 else:
-                    print(f"⚠️ Google Form 400: {resp.status}")
-                    # Раскомментируйте для отладки:
-                    # print("Ответ:", text[:500])
+                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
     except Exception as e:
-        print(f"❌ send_to_google_form error: {e}")
+        print(f"⚠️ Исключение при отправке в Google Form: {e}")
 
 
 # === FSM ===
