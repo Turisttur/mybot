@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # 🔑 Настройки
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://mybot.onrender.com/webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -39,12 +39,13 @@ async def send_to_google_form(name, phone, date_str, time_str, service):
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(FORM_URL, data=form_data) as resp:
-                if resp.status == 200:
-                    print("✅ Данные отправлены в Google Таблицу")
+                text = await resp.text()
+                if resp.status in (200, 302):  # Google Forms часто возвращает 200 или 302
+                    print("✅ Данные отправлены в Google Form")
                 else:
-                    print(f"⚠️ Google Form error: {resp.status}")
+                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
     except Exception as e:
-        print(f"⚠️ Google Form exception: {e}")
+        print(f"⚠️ Исключение при отправке в Google Form: {e}")
 
 # === FSM ===
 TIMEZONE = pytz.timezone("Asia/Almaty")
