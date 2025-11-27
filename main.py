@@ -21,40 +21,32 @@ dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
 # === Google Form настройки ===
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
 
-import aiohttp
-from urllib.parse import quote_plus
-import re
+ENTRY_NAME = "entry.929095536"
+ENTRY_PHONE = "entry.1802722855"
+ENTRY_DATE = "entry.1964769702"
+ENTRY_TIME = "entry.1869005656"
+ENTRY_SERVICE = "entry.1966683913"
 
 async def send_to_google_form(name, phone, date_str, time_str, service):
-    # 🔹 Форматируем как в предзаполненной ссылке
-    date_clean = re.sub(r'[^\d.]', '.', date_str)
-    time_clean = re.sub(r'[^\d:]', ':', time_str).split(':')
-    time_f = f"{time_clean[0].zfill(2)}:{time_clean[1].zfill(2)}" if len(time_clean) >= 2 else time_str
-
-    # 🔹 Генерируем URL как вручную
-    params = [
-        f"entry.929095536={quote_plus(name.strip())}",
-        f"entry.1802722855={quote_plus(phone.strip())}",
-        f"entry.1964769702={quote_plus(date_clean)}",      # дд.мм.гггг
-        f"entry.1869005656={quote_plus(time_f)}",           # чч:мм
-        f"entry.1966683913={quote_plus(service.strip())}",
-        "usp=pp_url"
-    ]
-
-    url = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/viewform?" + "&".join(params)
-
     try:
-        # 🔹 Делаем GET-запрос (не POST!)
+        form_data = {
+            ENTRY_NAME: name.strip(),
+            ENTRY_PHONE: phone.strip(),
+            ENTRY_DATE: date_str.strip(),
+            ENTRY_TIME: time_str.strip(),
+            ENTRY_SERVICE: service.strip()
+        }
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status == 200:
-                    print("✅ Успешно: запись в Таблице (GET)")
+            async with session.post(FORM_URL, data=form_data) as resp:
+                text = await resp.text()
+                if resp.status in (200, 302):
+                    print("✅ Данные отправлены в Google Form")
                 else:
-                    print(f"⚠️ 400: {resp.status}")
+                    print(f"⚠️ Ошибка Google Form: {resp.status}, ответ: {text[:200]}")
     except Exception as e:
-        print(f"❌ GET error: {e}")
-
+        print(f"⚠️ Исключение при отправке в Google Form: {e}")
 
 # === FSM ===
 TIMEZONE = pytz.timezone("Asia/Almaty")
