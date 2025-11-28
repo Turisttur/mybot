@@ -1,238 +1,191 @@
-import os
-import logging
-from datetime import datetime, timedelta, time
-import pytz
-import aiohttp
-from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
+from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import aiohttp, asyncio, re
+from datetime import datetime, timedelta
 
-# 🔑 Настройки
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
+API_TOKEN = "8454009227:AAHP3Q1HArGgcr519se0Qye4x7eQp4-cjZ4"
+WEBAPP_BASE = "https://script.google.com/macros/s/AKfycbzBysv3Fm1zgUf2Z7qWp-yC8pJHpBACrAd0ALpqoUmbjZ9Czl_lmvK2nZg0bAnIEfSS/exec"  # например: https://script.google.com/macros/s/XXX/exec
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-app = FastAPI()
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher()
 
-# === Google Form настройки ===
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfA9agctAXbg3897M0N2aSGAy1BQOBc8zUJuNtuXj_JMUvHUw/formResponse"
+# ------------------- FSM для записи -------------------
+class BookingForm(StatesGroup):
+    name = State()
+    phone = State()
+    service = State()
+    date = State()
+    time = State()
+    confirm = State()
 
-ENTRY_NAME = "entry.929095536"
-ENTRY_PHONE = "entry.1802722855"
-ENTRY_DATE = "entry.1964769702"
-ENTRY_TIME = "entry.1869005656"
-ENTRY_SERVICE = "entry.1966683913"
+async def post_json(url, payload):
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload) as r:
+            return await r.json()
 
-import aiohttp
-import json
+async def get_json(url):
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url) as r:
+            return await r.json()
 
-# Вставьте ваш Web App URL:
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz-CqU2X5QeJPzu2Q0eJZdkZ5YSu00rLBEO9JDUw7LDgLbkfDO9_s2swRSy-fn0wtdh/exec"
-
-async def send_to_web_app(name, phone, date_str, time_str, service):
-    try:
-        payload = {
-            "name": name.strip(),
-            "phone": phone.strip(),
-            "date": date_str,      # "2025-11-27"
-            "time": time_str,      # "11:47"
-            "service": service.strip()
-        }
-
-        headers = {"Content-Type": "application/json"}
-        timeout = aiohttp.ClientTimeout(total=10)
-
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(WEB_APP_URL, json=payload, headers=headers) as resp:
-                text = await resp.text()
-                try:
-                    result = json.loads(text)
-                    if "error" in result:
-                        print(f"⚠️ Web App error: {result['error']}")
-                    else:
-                        print("✅ Успешно: запись в Таблице")
-                except:
-                    print(f"⚠️ Не JSON: {text[:100]}")
-    except Exception as e:
-        print(f"❌ Web App exception: {e}")
-
-# === FSM ===
-TIMEZONE = pytz.timezone("Asia/Almaty")
-WORKING_HOURS = {
-    "mon": (time(10, 0), time(20, 0)),
-    "tue": (time(10, 0), time(20, 0)),
-    "wed": (time(10, 0), time(20, 0)),
-    "thu": (time(10, 0), time(20, 0)),
-    "fri": (time(10, 0), time(20, 0)),
-    "sat": (time(10, 0), time(18, 0)),
-    "sun": None
-}
-
-class Booking(StatesGroup):
-    choosing_service = State()
-    entering_name = State()
-    entering_phone = State()
-    choosing_day = State()
-    choosing_time = State()
-
-def get_days_kb():
-    now = datetime.now(TIMEZONE)
-    buttons = []
-    for i in range(14):
-        day = now + timedelta(days=i)
-        wd = day.strftime("%a").lower()[:3]
-        if WORKING_HOURS[wd]:
-            text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-            buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-def get_times_kb(date_str):
-    day = datetime.strptime(date_str, "%Y-%m-%d")
-    wd = day.strftime("%a").lower()[:3]
-    hours = WORKING_HOURS[wd]
-    if not hours:
-        return None
-    start, end = hours
-    slots = []
-    current = TIMEZONE.localize(datetime.combine(day.date(), start))
-    end_dt = TIMEZONE.localize(datetime.combine(day.date(), end))
-    while current < end_dt:
-        if (current - datetime.now(TIMEZONE)).total_seconds() > 1800:
-            slots.append(current.strftime("%H:%M"))
-        current += timedelta(minutes=60)
-    if not slots:
-        return None
-    buttons = [[InlineKeyboardButton(text=t, callback_data=f"time_{t}")] for t in slots]
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-# === Хэндлеры ===
-@dp.message(Command("start"))
-async def start(msg: Message, state: FSMContext):
-    await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
-        [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
-    ])
-    await msg.answer("🌸 Добро пожаловать в ASEM PODO @ BEAUTY!", reply_markup=kb)
-
-@dp.callback_query(F.data == "main")
-async def main_menu(cb: CallbackQuery, state: FSMContext):
-    await start(cb.message, state)
-
-@dp.callback_query(F.data == "book")
-async def book(cb: CallbackQuery, state: FSMContext):
-    await state.set_state(Booking.choosing_service)
-    buttons = [
-        [InlineKeyboardButton(text="Медицинская подология", callback_data="srv_Медподология")],
-        [InlineKeyboardButton(text="Эстетический маникюр", callback_data="srv_Маникюр")],
-        [InlineKeyboardButton(text="Педикюр премиум", callback_data="srv_Педикюр")],
-        [InlineKeyboardButton(text="Визаж", callback_data="srv_Визаж")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
-    ]
-    await cb.message.edit_text("Выберите услугу:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-@dp.callback_query(F.data.startswith("srv_"))
-async def srv(cb: CallbackQuery, state: FSMContext):
-    service = cb.data[4:]
-    await state.update_data(service=service)
-    await state.set_state(Booking.entering_name)
-    await cb.message.edit_text("Введите ваше имя:")
-
-@dp.message(Booking.entering_name)
-async def name(msg: Message, state: FSMContext):
-    await state.update_data(name=msg.text)
-    await state.set_state(Booking.entering_phone)
-    await msg.answer("Введите ваш телефон:")
-
-@dp.message(Booking.entering_phone)
-async def phone(msg: Message, state: FSMContext):
-    await state.update_data(phone=msg.text)
-    await state.set_state(Booking.choosing_day)
-    await msg.answer("Выберите день:", reply_markup=get_days_kb())
-
-@dp.callback_query(F.data.startswith("day_"))
-async def day(cb: CallbackQuery, state: FSMContext):
-    date = cb.data[4:]
-    await state.update_data(date=date)
-    await state.set_state(Booking.choosing_time)
-    kb = get_times_kb(date)
-    if kb:
-        await cb.message.edit_text("Выберите время:", reply_markup=kb)
-    else:
-        await cb.answer("Нет свободного времени в этот день.", show_alert=True)
-
-@dp.callback_query(F.data.startswith("time_"))
-async def time(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    if not data:
-        await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
-        await state.clear()
-        return
-
-    service = data.get("service", "не указана")
-    name = data.get("name", "—")
-    phone = data.get("phone", "—")
-    date_str = data.get("date")
-    tm = cb.data[5:]
-
-    if not date_str:
-        await cb.message.answer("❌ Не указана дата. Начните с /start.")
-        await state.clear()
-        return
-
-    # Отправляем данные только в Web App
-    await send_to_web_app(name, phone, date_str, tm, service)
-
-    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-    date_fmt = date_obj.strftime("%d.%m")
-    await cb.message.edit_text(
-        f"✅ Запись подтверждена!\n\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}\n📍 Аягоз, ул. Актамберды, 23"
-    )
-    await bot.send_message(
-        ADMIN_CHAT_ID,
-        f"🆕 Новая запись!\n👤 {name}\n📱 {phone}\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}"
-    )
-    await state.clear()
-
-
-@dp.callback_query(F.data == "contact")
-async def contact(cb: CallbackQuery):
+# ------------------- START -------------------
+@dp.message_handler(commands=["start"])
+async def start_command(m: types.Message):
     text = (
-        "📍 *Аягоз, ул. Актамберды, 23*\n"
-        "🕒 *Пн–Пт:* 10:00–20:00\n"
-        "🕒 *Сб:* 10:00–18:00\n"
-        "📱 +7 777 123 45 67\n"
-        "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
+        "👋 Добро пожаловать в наш бот‑CRM!\n\n"
+        "Доступные команды:\n"
+        "/book — записать клиента\n"
+        "/records — показать список последних записей\n"
+        "/clients — показать список клиентов\n"
+        "/services — показать список услуг\n"
+        "/help — показать справку по командам\n"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
-    ])
-    await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+    await m.answer(text)
 
-# === Webhook настройка ===
-@app.on_event("startup")
-async def on_startup():
-    logging.basicConfig(level=logging.INFO)
-    await bot.set_webhook(WEBHOOK_URL)
-    print(f"✅ Webhook установлен: {WEBHOOK_URL}")
+# ------------------- HELP -------------------
+@dp.message_handler(commands=["help"])
+async def show_help(m: types.Message):
+    text = (
+        "🛠 Справка по командам:\n\n"
+        "/book — записать клиента\n"
+        "/records — показать список последних записей\n"
+        "/clients — показать список клиентов\n"
+        "/services — показать список услуг\n"
+        "/help — показать это меню\n"
+    )
+    await m.answer(text)
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
-    update = types.Update(**data)
-    await dp.feed_update(bot, update)
-    return {"ok": True}
+# ------------------- BOOK -------------------
+@dp.message_handler(commands=["book"])
+async def start_booking(m: types.Message, state: FSMContext):
+    await m.answer("Как вас зовут?")
+    await state.set_state(BookingForm.name)
 
-# Health-check для Render
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
+@dp.message_handler(state=BookingForm.name)
+async def process_name(m: types.Message, state: FSMContext):
+    await state.update_data(name=m.text.strip())
+    await m.answer("Укажите телефон (например, 87001234567):")
+    await state.set_state(BookingForm.phone)
+
+@dp.message_handler(state=BookingForm.phone)
+async def process_phone(m: types.Message, state: FSMContext):
+    phone = re.sub(r"\D","",m.text)
+    if not re.match(r"^\d{10,12}$",phone):
+        await m.answer("❌ Неверный формат телефона.")
+        return
+    await state.update_data(phone=phone)
+
+    services_data = await get_json(f"{WEBAPP_BASE}/services")
+    services = services_data.get("services",[])
+    kb = InlineKeyboardBuilder()
+    for s in services:
+        kb.button(text=s["name"], callback_data=f"service:{s['name']}")
+    kb.adjust(2)
+    await m.answer("Выберите услугу:", reply_markup=kb.as_markup())
+
+@dp.callback_query_handler(lambda c: c.data.startswith("service:"), state=BookingForm.phone)
+async def process_service(c: types.CallbackQuery, state: FSMContext):
+    await state.update_data(service=c.data.split(":",1)[1])
+    kb = InlineKeyboardBuilder()
+    today = datetime.today()
+    for i in range(7):
+        d = today+timedelta(days=i)
+        kb.button(text=d.strftime("%Y-%m-%d"), callback_data=f"date:{d.strftime('%Y-%m-%d')}")
+    kb.adjust(2)
+    await c.message.answer("Выберите дату:", reply_markup=kb.as_markup())
+    await state.set_state(BookingForm.date)
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("date:"), state=BookingForm.date)
+async def process_date(c: types.CallbackQuery, state: FSMContext):
+    await state.update_data(date=c.data.split(":",1)[1])
+    kb = InlineKeyboardBuilder()
+    for h in range(10,19):
+        kb.button(text=f"{h:02d}:00", callback_data=f"time:{h:02d}:00")
+    kb.adjust(3)
+    await c.message.answer("Выберите время:", reply_markup=kb.as_markup())
+    await state.set_state(BookingForm.time)
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("time:"), state=BookingForm.time)
+async def process_time(c: types.CallbackQuery, state: FSMContext):
+    await state.update_data(time=c.data.split(":",1)[1])
+    data = await state.get_data()
+    result = await post_json(WEBAPP_BASE,data)
+    if result.get("status")=="busy":
+        kb = InlineKeyboardBuilder()
+        for t in result.get("suggestions",{}).get("before",[])+result.get("suggestions",{}).get("after",[]):
+            kb.button(text=t, callback_data=f"choose_time:{t}")
+        kb.adjust(3)
+        await c.message.answer(result.get("message","⚠️ Занято"), reply_markup=kb.as_markup())
+        await state.set_state(BookingForm.confirm)
+    else:
+        await c.message.answer(result.get("message","❌ Ошибка"))
+        await state.clear()
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("choose_time:"), state=BookingForm.confirm)
+async def process_choice(c: types.CallbackQuery, state: FSMContext):
+    new_time = c.data.split(":",1)[1]
+    data = await state.get_data()
+    data["time"] = new_time
+    result = await post_json(WEBAPP_BASE,data)
+    await c.message.answer(result.get("message","❌ Ошибка"))
+    await c.answer()
+    await state.clear()
+
+# ------------------- RECORDS -------------------
+@dp.message_handler(commands=["records"])
+async def show_records(m: types.Message):
+    records_data = await get_json(f"{WEBAPP_BASE}/records")
+    records = records_data.get("records",[])
+    if not records:
+        await m.answer("❌ Записей нет.")
+        return
+
+    text = "📋 Список записей:\n\n"
+    for rec in records[:10]:
+        text += (f"👤 {rec['name']} ({rec['phone']})\n"
+                 f"📅 {rec['date']} {rec['time']}\n"
+                 f"💅 {rec['service']}\n"
+                 f"⏱️ {rec['durationHours']} ч | 💰 {rec['price']} ₸\n\n")
+    await m.answer(text)
+
+# ------------------- CLIENTS -------------------
+@dp.message_handler(commands=["clients"])
+async def show_clients(m: types.Message):
+    clients_data = await get_json(f"{WEBAPP_BASE}/clients")
+    clients = clients_data.get("clients", [])
+    if not clients:
+        await m.answer("❌ Клиентов нет.")
+        return
+
+    text = "👥 Список клиентов:\n\n"
+    for cl in clients[:10]:
+        text += f"👤 {cl['name']} — 📞 {cl['phone']}\n"
+    await m.answer(text)
+
+# ------------------- SERVICES -------------------
+@dp.message_handler(commands=["services"])
+async def show_services(m: types.Message):
+    services_data = await get_json(f"{WEBAPP_BASE}/services")
+    services = services_data.get("services", [])
+    if not services:
+        await m.answer("❌ Услуг нет.")
+        return
+
+    text = "💅 Список услуг:\n\n"
+    for s in services[:10]:
+        text += (f"🔹 {s['name']}\n"
+                 f"⏱️ {s['durationHours']} ч | 💰 {s['price']} ₸\n\n")
+    await m.answer(text)
+
+# ------------------- Запуск -------------------
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
