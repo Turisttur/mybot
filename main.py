@@ -33,7 +33,7 @@ import aiohttp
 import json
 
 # Вставьте ваш Web App URL:
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyy7dH_NJo9AwS6g26xBwYKV4ApBj6DGVayDMYYHWHXgiU1GLP79Q01nIjhTC4ITyw/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz-CqU2X5QeJPzu2Q0eJZdkZ5YSu00rLBEO9JDUw7LDgLbkfDO9_s2swRSy-fn0wtdh/exec"
 
 async def send_to_web_app(name, phone, date_str, time_str, service):
     try:
