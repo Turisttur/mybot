@@ -72,7 +72,7 @@ app = FastAPI()
 async def on_startup():
     # Удаляем старый webhook и ставим новый
     await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_webhook("https://your-app.onrender.com/webhook")
+    await bot.set_webhook("https://bot-k7rs.onrender.com")
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
