@@ -13,7 +13,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 API_TOKEN = "8454009227:AAHP3Q1HArGgcr519se0Qye4x7eQp4-cjZ4"
 ADMIN_CHAT_ID = 6734540756  # ваш ID или ID группы для уведомлений
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBysv3Fm1zgUf2Z7qWp-yC8pJHpBACrAd0ALpqoUmbjZ9Czl_lmvK2nZg0bAnIEfSS/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwqHNyJId2SpJb7XLcd51QyBoh7_DyMPTI25l_xPth08nu7SvDtUnRii-inWxzLDxd1/exec"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
