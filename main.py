@@ -10,10 +10,12 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
 
-API_TOKEN = "8454009227:AAHP3Q1HArGgcr519se0Qye4x7eQp4-cjZ4"
-ADMIN_CHAT_ID = 6734540756  # ваш ID или ID группы для уведомлений
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyT6GVcFW-ihE1TeTQqvhSwBiqGvOv418OkaZaUy54CHScFruiZDEWLS0jxVRIpuwQYuA/exec"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtNHEI30kUAnBXZBtYldQd5g6k-ANYsHnJ_bLokI-n9MqX_coozbiMjygG11xiVgc/exec"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
