@@ -1,19 +1,22 @@
 
 
+
 import asyncio
 import aiohttp
+from fastapi import FastAPI
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.filters import Command
 
 API_TOKEN = "8454009227:AAHP3Q1HArGgcr519se0Qye4x7eQp4-cjZ4"
 WEBAPP_BASE = "https://script.google.com/macros/s/AKfycbzBysv3Fm1zgUf2Z7qWp-yC8pJHpBACrAd0ALpqoUmbjZ9Czl_lmvK2nZg0bAnIEfSS/exec"  # URL вашего Web App
 
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# 📌 Команда /start
+# 📌 Обработчик команды /start
 @router.message(Command("start"))
 async def start_handler(message: types.Message):
     await message.answer(
@@ -26,7 +29,6 @@ async def start_handler(message: types.Message):
 @router.message()
 async def record_handler(message: types.Message):
     try:
-        # Разбираем сообщение
         parts = [p.strip() for p in message.text.split(",")]
         if len(parts) != 5:
             await message.answer("⚠️ Формат неверный. Нужно: Имя, Телефон, Услуга, Дата, Время")
@@ -41,12 +43,10 @@ async def record_handler(message: types.Message):
             "Время": time
         }
 
-        # Отправляем POST в Web App
         async with aiohttp.ClientSession() as session:
             async with session.post(WEB_APP_URL, json=payload) as resp:
                 data = await resp.json()
 
-        # Обрабатываем ответ
         if data["status"] == "ok":
             await message.answer(data["message"])
         elif data["status"] == "busy":
@@ -63,9 +63,17 @@ async def record_handler(message: types.Message):
     except Exception as e:
         await message.answer(f"⚠️ Ошибка обработки: {e}")
 
-# 📌 Запуск бота
-async def main():
+# 📌 Запуск бота в фоне
+async def run_bot():
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Создаём FastAPI‑приложение
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(run_bot())
+
+@app.get("/")
+async def root():
+    return {"status": "бот запущен"}
