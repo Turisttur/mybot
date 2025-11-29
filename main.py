@@ -41,14 +41,17 @@ class Booking(StatesGroup):
 async def send_to_web_app(name, phone, date_str, time_str, service):
     try:
         payload = {
-            "name": name.strip(),
-            "phone": phone.strip(),
-            "date": date_str,
-            "time": time_str,
-            "service": service.strip()
+            "Имя": name.strip(),
+            "Телефон": phone.strip(),
+            "Дата": date_str,      # например "2025-11-27"
+            "Время": time_str,     # например "11:47"
+            "Услуга": service.strip()
         }
+
         headers = {"Content-Type": "application/json"}
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=10)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(WEB_APP_URL, json=payload, headers=headers) as resp:
                 text = await resp.text()
                 try:
@@ -56,11 +59,12 @@ async def send_to_web_app(name, phone, date_str, time_str, service):
                     if "error" in result:
                         print(f"⚠️ Web App error: {result['error']}")
                     else:
-                        print("✅ Успешно: запись в Таблице")
+                        print("✅ Успешно: запись в Таблице и Календаре")
                 except:
                     print(f"⚠️ Не JSON: {text[:100]}")
     except Exception as e:
         print(f"❌ Web App exception: {e}")
+
 
 def get_days_kb():
     now = datetime.now(TIMEZONE)
