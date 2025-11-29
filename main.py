@@ -166,29 +166,42 @@ async def time(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
+    # Собираем данные для запроса
     service = data.get("service", "не указана")
     name = data.get("name", "—")
     phone = data.get("phone", "—")
     date_str = data.get("date")
-    tm = cb.data[5:]
+    tm = cb.data[5:]  # время из callback
 
-    if not date_str:
-        await cb.message.answer("❌ Не указана дата. Начните с /start.")
-        await state.clear()
-        return
+    payload = {
+        "Имя": name,
+        "Телефон": phone,
+        "Услуга": service,
+        "Дата": date_str,
+        "Время": tm
+    }
 
-    await send_to_web_app(name, phone, date_str, tm, service)
+    # Отправляем POST на ваш Google Apps Script
+    async with aiohttp.ClientSession() as session:
+        async with session.post(WEBAPP_URL, json=payload) as resp:
+            result = await resp.json()
 
-    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-    date_fmt = date_obj.strftime("%d.%m")
-    await cb.message.edit_text(
-        f"✅ Запись подтверждена!\n\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}\n📍 Аягоз, ул. Актамберды, 23"
-    )
-    await bot.send_message(
-        ADMIN_CHAT_ID,
-        f"🆕 Новая запись!\n👤 {name}\n📱 {phone}\n📅 {date_fmt}\n⏰ {tm}\n💅 {service}"
-    )
+    # Проверяем ответ
+    if result.get("status") == "ok":
+        await cb.message.edit_text(result["message"])
+    elif result.get("status") == "busy":
+        text = result["message"]
+        suggestions = result.get("suggestions", [])
+        if suggestions:
+            text += "\n\nДоступные варианты:\n"
+            for s in suggestions:
+                text += f"• {s['Дата']} {s['Время']}\n"
+        await cb.message.edit_text(text)
+    else:
+        await cb.message.edit_text(f"❌ Ошибка: {result.get('message')}")
+
     await state.clear()
+
 
 @router.callback_query(F.data == "contact")
 async def contact(cb: CallbackQuery):
