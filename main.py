@@ -1,15 +1,17 @@
 
 
 
+
+
+
 import asyncio
 import aiohttp
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.filters import Command
 
 API_TOKEN = "8454009227:AAHP3Q1HArGgcr519se0Qye4x7eQp4-cjZ4"
 WEBAPP_BASE = "https://script.google.com/macros/s/AKfycbzBysv3Fm1zgUf2Z7qWp-yC8pJHpBACrAd0ALpqoUmbjZ9Czl_lmvK2nZg0bAnIEfSS/exec"  # URL вашего Web App
-
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -63,16 +65,21 @@ async def record_handler(message: types.Message):
     except Exception as e:
         await message.answer(f"⚠️ Ошибка обработки: {e}")
 
-# 📌 Запуск бота в фоне
-async def run_bot():
-    await dp.start_polling(bot)
-
-# Создаём FastAPI‑приложение
+# ------------------ FastAPI ------------------
 app = FastAPI()
 
 @app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(run_bot())
+async def on_startup():
+    # Удаляем старый webhook и ставим новый
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook("https://your-app.onrender.com/webhook")
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = types.Update(**data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
 @app.get("/")
 async def root():
