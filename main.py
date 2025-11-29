@@ -1,5 +1,6 @@
 
 import os
+import logging
 import json
 import aiohttp
 import pytz
@@ -11,14 +12,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
+from fastapi import FastAPI, Request
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtNHEI30kUAnBXZBtYldQd5g6k-ANYsHnJ_bLokI-n9MqX_coozbiMjygG11xiVgc/exec"
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+app = FastAPI()
 router = Router()
 dp.include_router(router)
 
