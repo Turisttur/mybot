@@ -35,7 +35,6 @@ if not WEBAPP_URL:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-app = FastAPI()
 router = Router()
 dp.include_router(router)
 
@@ -71,7 +70,7 @@ async def send_to_web_app(name, phone, date_str, time_str, service):
         timeout = aiohttp.ClientTimeout(total=10)
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(WEB_APP_URL, json=payload, headers=headers) as resp:
+            async with session.post(WEBAPP_URL, json=payload, headers=headers) as resp:
                 text = await resp.text()
                 try:
                     result = json.loads(text)
