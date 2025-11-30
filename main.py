@@ -53,20 +53,23 @@ async def get_slots():
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(WEBAPP_URL) as resp:
-                text = await resp.text()
-                print("RAW RESPONSE:", text[:300])  # лог
+                print("doGet status:", resp.status)
+                
+                # напрямую пробуем json()
+                try:
+                    result = await resp.json(content_type=None)
+                except Exception as e:
+                    text = await resp.text()
+                    print("RAW RESPONSE:", text[:300])
+                    raise e
 
-                # убираем лишние пробелы/переводы строк
-                text = text.strip()
-
-                # пробуем распарсить
-                result = json.loads(text)
                 slots = result.get("slots", [])
                 print("Parsed slots:", slots[:5])
                 return slots
     except Exception as e:
         print(f"❌ Ошибка получения слотов: {e}")
         return []
+
 
 
 
