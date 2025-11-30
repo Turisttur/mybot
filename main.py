@@ -48,24 +48,57 @@ class Booking(StatesGroup):
     choosing_time = State()
 
 # === Запрос слотов из WebApp ===
+import json
+import re
+import aiohttp
+
 async def get_slots():
     try:
-        timeout = aiohttp.ClientTimeout(total=10)
+        timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(WEBAPP_URL) as resp:
-                print("doGet status:", resp.status)
-                
-                # напрямую пробуем json()
+                status = resp.status
+                ctype = resp.headers.get("Content-Type", "")
+                text = await resp.text()
+                print("doGet status:", status)
+                print("doGet Content-Type:", ctype)
+                print("RAW RESPONSE (first 500):", text[:500])
+
+                # 1) Надёжный парсер aiohttp (даже если Content-Type неверный)
                 try:
                     result = await resp.json(content_type=None)
-                except Exception as e:
-                    text = await resp.text()
-                    print("RAW RESPONSE:", text[:300])
-                    raise e
+                    slots = result.get("slots", [])
+                    print("Parsed via resp.json:", slots[:5])
+                    return slots
+                except Exception as e1:
+                    print("resp.json failed:", e1)
 
-                slots = result.get("slots", [])
-                print("Parsed slots:", slots[:5])
-                return slots
+                # 2) Стандартый парсер
+                try:
+                    result = json.loads(text.strip())
+                    slots = result.get("slots", [])
+                    print("Parsed via json.loads:", slots[:5])
+                    return slots
+                except Exception as e2:
+                    print("json.loads failed:", e2)
+
+                # 3) Грубый поиск JSON-блока {"slots":[...]}
+                m = re.search(r'(\{[^{}]*"slots"\s*:\s*
+
+\[[\s\S]*?\]
+
+\s*\})', text)
+                if m:
+                    try:
+                        result = json.loads(m.group(1))
+                        slots = result.get("slots", [])
+                        print("Parsed via regex:", slots[:5])
+                        return slots
+                    except Exception as e3:
+                        print("regex parse failed:", e3)
+
+                print("❌ Не удалось распарсить ответ в JSON.")
+                return []
     except Exception as e:
         print(f"❌ Ошибка получения слотов: {e}")
         return []
@@ -75,6 +108,12 @@ async def get_slots():
 
 # === Клавиатуры ===
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def error_reload_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить слоты", callback_data="refresh_days")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
+    ])
 
 def build_days_kb(slots: list[dict]) -> InlineKeyboardMarkup:
     valid = [s for s in slots if "Дата" in s]
@@ -147,6 +186,8 @@ async def start(msg: Message, state: FSMContext):
     ])
     await msg.answer("🌸 Добро пожаловать в ASEM PODO @ BEAUTY!", reply_markup=kb)
 
+   
+
 @router.callback_query(F.data == "main")
 async def main_menu(cb: CallbackQuery, state: FSMContext):
     await start(cb.message, state)
@@ -186,7 +227,7 @@ async def phone(msg: Message, state: FSMContext):
 
     slots = await get_slots()
     if not slots:
-        await msg.answer("❌ Не удалось загрузить слоты. Попробуйте позже.")
+        await msg.answer("❌ Не удалось загрузить слоты. Попробуйте позже.", reply_markup=error_reload_kb())
         return
 
     kb = build_days_kb(slots)
@@ -200,6 +241,16 @@ async def day(cb: CallbackQuery, state: FSMContext):
     slots = await get_slots()
     kb = build_times_kb(slots, date)
     await cb.message.edit_text(f"Выберите время на {date}:", reply_markup=kb)
+
+@router.callback_query(F.data == "refresh_days")
+async def refresh_days(cb: CallbackQuery, state: FSMContext):
+    await cb.answer("Обновляю…")
+    slots = await get_slots()
+    if not slots:
+        await cb.message.edit_text("❌ Не удалось загрузить слоты. Попробуйте позже.", reply_markup=error_reload_kb())
+        return
+    kb = build_days_kb(slots)
+    await cb.message.edit_text("Выберите день:", reply_markup=kb)    
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
