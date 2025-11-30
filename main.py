@@ -54,37 +54,41 @@ async def get_slots():
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(WEBAPP_URL) as resp:
                 text = await resp.text()
+                # Проверяем, что ответ действительно JSON
                 result = json.loads(text)
                 return result.get("slots", [])
     except Exception as e:
         print(f"❌ Ошибка получения слотов: {e}")
         return []
 
+
 # === Клавиатуры ===
 def build_days_kb(slots):
-    kb = InlineKeyboardMarkup(row_width=3)
+    buttons = []
     dates = sorted(set(slot["Дата"] for slot in slots))
     for date in dates:
-        kb.insert(InlineKeyboardButton(text=date, callback_data=f"day_{date}"))
-    kb.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="main"))
-    return kb
+        buttons.append([InlineKeyboardButton(text=date, callback_data=f"day_{date}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def build_times_kb(slots, date):
-    kb = InlineKeyboardMarkup(row_width=3)
+    buttons = []
     for slot in slots:
         if slot["Дата"] == date:
             if slot["status"] == "free":
-                kb.insert(InlineKeyboardButton(
+                buttons.append([InlineKeyboardButton(
                     text=f"{slot['Время']} ✅",
                     callback_data=f"time_{slot['Время']}"
-                ))
+                )])
             else:
-                kb.insert(InlineKeyboardButton(
+                buttons.append([InlineKeyboardButton(
                     text=f"{slot['Время']} ❌",
                     callback_data="busy"
-                ))
-    kb.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day"))
-    return kb
+                )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 # === Отправка записи в WebApp ===
 async def send_booking(name, phone, service, date, time):
