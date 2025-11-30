@@ -88,6 +88,9 @@ async def get_slots():
 \[[\s\S]*?\]
 
 \s*\})', text)
+
+
+
                 if m:
                     try:
                         result = json.loads(m.group(1))
