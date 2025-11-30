@@ -54,57 +54,19 @@ import aiohttp
 
 async def get_slots():
     try:
-        timeout = aiohttp.ClientTimeout(total=12)
+        timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(WEBAPP_URL) as resp:
-                status = resp.status
-                ctype = resp.headers.get("Content-Type", "")
-                text = await resp.text()
-                print("doGet status:", status)
-                print("doGet Content-Type:", ctype)
-                print("RAW RESPONSE (first 500):", text[:500])
-
-                # 1) Надёжный парсер aiohttp (даже если Content-Type неверный)
-                try:
-                    result = await resp.json(content_type=None)
-                    slots = result.get("slots", [])
-                    print("Parsed via resp.json:", slots[:5])
-                    return slots
-                except Exception as e1:
-                    print("resp.json failed:", e1)
-
-                # 2) Стандартый парсер
-                try:
-                    result = json.loads(text.strip())
-                    slots = result.get("slots", [])
-                    print("Parsed via json.loads:", slots[:5])
-                    return slots
-                except Exception as e2:
-                    print("json.loads failed:", e2)
-
-                # 3) Грубый поиск JSON-блока {"slots":[...]}
-                m = re.search(r'(\{[^{}]*"slots"\s*:\s*\[[\s\S]*?\]\s*\})', text)
-
-               
-
-                
-
-
-
-                if m:
-                    try:
-                        result = json.loads(m.group(1))
-                        slots = result.get("slots", [])
-                        print("Parsed via regex:", slots[:5])
-                        return slots
-                    except Exception as e3:
-                        print("regex parse failed:", e3)
-
-                print("❌ Не удалось распарсить ответ в JSON.")
-                return []
+                print("Status:", resp.status)
+                print("Content-Type:", resp.headers.get("Content-Type"))
+                result = await resp.json(content_type=None)
+                slots = result.get("slots", [])
+                print("Parsed slots:", slots[:5])
+                return slots
     except Exception as e:
         print(f"❌ Ошибка получения слотов: {e}")
         return []
+
 
 
 
@@ -250,10 +212,25 @@ async def refresh_days(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Обновляю…")
     slots = await get_slots()
     if not slots:
-        await cb.message.edit_text("❌ Не удалось загрузить слоты. Попробуйте позже.", reply_markup=error_reload_kb())
+        try:
+            await cb.message.edit_text(
+                "❌ Не удалось загрузить слоты. Попробуйте позже.",
+                reply_markup=error_reload_kb()
+            )
+        except Exception as e:
+            print("Edit failed:", e)
+            await cb.message.answer(
+                "❌ Не удалось загрузить слоты. Попробуйте позже.",
+                reply_markup=error_reload_kb()
+            )
         return
+
     kb = build_days_kb(slots)
-    await cb.message.edit_text("Выберите день:", reply_markup=kb)    
+    try:
+        await cb.message.edit_text("Выберите день:", reply_markup=kb)
+    except Exception:
+        await cb.message.answer("Выберите день:", reply_markup=kb)
+    
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
