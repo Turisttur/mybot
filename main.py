@@ -39,15 +39,6 @@ router = Router()
 dp.include_router(router)
 
 TIMEZONE = pytz.timezone("Asia/Almaty")
-WORKING_HOURS = {
-    "mon": (time(10, 0), time(20, 0)),
-    "tue": (time(10, 0), time(20, 0)),
-    "wed": (time(10, 0), time(20, 0)),
-    "thu": (time(10, 0), time(20, 0)),
-    "fri": (time(10, 0), time(20, 0)),
-    "sat": (time(10, 0), time(18, 0)),
-    "sun": None
-}
 
 class Booking(StatesGroup):
     choosing_service = State()
@@ -56,65 +47,63 @@ class Booking(StatesGroup):
     choosing_day = State()
     choosing_time = State()
 
-async def send_to_web_app(name, phone, date_str, time_str, service):
+# === Запрос слотов из WebApp ===
+async def get_slots():
     try:
-        payload = {
-            "Имя": name.strip(),
-            "Телефон": phone.strip(),
-            "Дата": date_str,      # например "2025-11-27"
-            "Время": time_str,     # например "11:47"
-            "Услуга": service.strip()
-        }
-
-        headers = {"Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=10)
-
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(WEBAPP_URL, json=payload, headers=headers) as resp:
+            async with session.get(WEBAPP_URL) as resp:
                 text = await resp.text()
-                try:
-                    result = json.loads(text)
-                    if "error" in result:
-                        print(f"⚠️ Web App error: {result['error']}")
-                    else:
-                        print("✅ Успешно: запись в Таблице и Календаре")
-                except:
-                    print(f"⚠️ Не JSON: {text[:100]}")
+                result = json.loads(text)
+                return result.get("slots", [])
     except Exception as e:
-        print(f"❌ Web App exception: {e}")
+        print(f"❌ Ошибка получения слотов: {e}")
+        return []
 
+# === Клавиатуры ===
+def build_days_kb(slots):
+    kb = InlineKeyboardMarkup(row_width=3)
+    dates = sorted(set(slot["Дата"] for slot in slots))
+    for date in dates:
+        kb.insert(InlineKeyboardButton(text=date, callback_data=f"day_{date}"))
+    kb.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="main"))
+    return kb
 
-def get_days_kb():
-    now = datetime.now(TIMEZONE)
-    buttons = []
-    for i in range(14):
-        day = now + timedelta(days=i)
-        wd = day.strftime("%a").lower()[:3]
-        if WORKING_HOURS[wd]:
-            text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-            buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def build_times_kb(slots, date):
+    kb = InlineKeyboardMarkup(row_width=3)
+    for slot in slots:
+        if slot["Дата"] == date:
+            if slot["status"] == "free":
+                kb.insert(InlineKeyboardButton(
+                    text=f"{slot['Время']} ✅",
+                    callback_data=f"time_{slot['Время']}"
+                ))
+            else:
+                kb.insert(InlineKeyboardButton(
+                    text=f"{slot['Время']} ❌",
+                    callback_data="busy"
+                ))
+    kb.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day"))
+    return kb
 
-def get_times_kb(date_str):
-    day = datetime.strptime(date_str, "%Y-%m-%d")
-    wd = day.strftime("%a").lower()[:3]
-    hours = WORKING_HOURS[wd]
-    if not hours:
-        return None
-    start, end = hours
-    slots = []
-    current = TIMEZONE.localize(datetime.combine(day.date(), start))
-    end_dt = TIMEZONE.localize(datetime.combine(day.date(), end))
-    while current < end_dt:
-        if (current - datetime.now(TIMEZONE)).total_seconds() > 1800:
-            slots.append(current.strftime("%H:%M"))
-        current += timedelta(minutes=30)
-    if not slots:
-        return None
-    buttons = [[InlineKeyboardButton(text=t, callback_data=f"time_{t}")] for t in slots]
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# === Отправка записи в WebApp ===
+async def send_booking(name, phone, service, date, time):
+    payload = {
+        "Имя": name,
+        "Телефон": phone,
+        "Услуга": service,
+        "Дата": date,
+        "Время": time
+    }
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(WEBAPP_URL, json=payload) as resp:
+                text = await resp.text()
+                return json.loads(text)
+    except Exception as e:
+        print(f"❌ Ошибка записи: {e}")
+        return {"status": "error", "message": str(e)}
 
 # === Хэндлеры ===
 @router.message(Command("start"))
@@ -134,10 +123,13 @@ async def main_menu(cb: CallbackQuery, state: FSMContext):
 async def book(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Booking.choosing_service)
     buttons = [
-        [InlineKeyboardButton(text="Медицинская подология", callback_data="srv_Медподология")],
-        [InlineKeyboardButton(text="Эстетический маникюр", callback_data="srv_Маникюр")],
-        [InlineKeyboardButton(text="Педикюр премиум", callback_data="srv_Педикюр")],
-        [InlineKeyboardButton(text="Визаж", callback_data="srv_Визаж")],
+        [InlineKeyboardButton(text="Медицинская подология", callback_data="srv_Медицинская подология")],
+        [InlineKeyboardButton(text="Эстетический маникюр", callback_data="srv_Эстетический маникюр")],
+        [InlineKeyboardButton(text="Педикюр премиум", callback_data="srv_Педикюр премиум")],
+        [InlineKeyboardButton(text="Наращивание ресниц", callback_data="srv_Наращивание ресниц")],
+        [InlineKeyboardButton(text="Коррекция бровей", callback_data="srv_Коррекция бровей")],
+        [InlineKeyboardButton(text="Прокалывание ушей", callback_data="srv_Прокалывание ушей")],
+        [InlineKeyboardButton(text="Визаж Макияж", callback_data="srv_Визаж Макияж")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
     ]
     await cb.message.edit_text("Выберите услугу:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
@@ -159,19 +151,18 @@ async def name(msg: Message, state: FSMContext):
 async def phone(msg: Message, state: FSMContext):
     await state.update_data(phone=msg.text)
     await state.set_state(Booking.choosing_day)
-    await msg.answer("Выберите день:", reply_markup=get_days_kb())
+    slots = await get_slots()
+    kb = build_days_kb(slots)
+    await msg.answer("Выберите день:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
     date = cb.data[4:]
     await state.update_data(date=date)
     await state.set_state(Booking.choosing_time)
-    kb = get_times_kb(date)
-    if kb:
-        await cb.message.edit_text("Выберите время:", reply_markup=kb)
-    else:
-        await cb.answer("Нет свободного времени в этот день.", show_alert=True)
-
+    slots = await get_slots()
+    kb = build_times_kb(slots, date)
+    await cb.message.edit_text(f"Выберите время на {date}:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
@@ -187,49 +178,22 @@ async def time(cb: CallbackQuery, state: FSMContext):
     date_str = data.get("date")
     tm = cb.data[5:]
 
-    if not date_str:
-        await cb.message.answer("❌ Не указана дата. Начните с /start.")
-        await state.clear()
-        return
+    result = await send_booking(name, phone, service, date_str, tm)
 
-    # ✅ Добавляем ДлительностьЧасы
-    dur_hours = DURATION_MAP.get(service, 1.0)
-
-    payload = {
-        "Имя": name,
-        "Телефон": phone,
-        "Услуга": service,
-        "Дата": date_str,
-        "Время": tm,
-        "ДлительностьЧасы": dur_hours  # ← КЛЮЧЕВО!
-    }
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(WEBAPP_URL, json=payload) as resp:
-                text = await resp.text()
-                result = json.loads(text)
-
-        if result.get("status") == "ok":
-            await cb.message.edit_text(result["message"])
-        elif result.get("status") == "busy":
-            text = result["message"]
-            suggestions = result.get("suggestions", [])
-            if suggestions:
-                text += "\n\n💡 Предлагаем:\n"
-                for s in suggestions[:3]:
-                    text += f"• {s['Дата']} в {s['Время']}\n"
-            await cb.message.edit_text(text)
-        else:
-            await cb.message.edit_text(f"❌ Сервер: {result.get('message', 'ошибка')}")
-
-    except Exception as e:
-        await cb.message.edit_text("❌ Ошибка подключения. Попробуйте позже.")
-        print(f"❗ Исключение: {e}")
+    if result.get("status") == "ok":
+        await cb.message.edit_text(result["message"])
+    elif result.get("status") == "busy":
+        text = result["message"]
+        suggestions = result.get("suggestions", [])
+        if suggestions:
+            text += "\n\n💡 Предлагаем:\n"
+            for s in suggestions[:3]:
+                text += f"• {s['Дата']} в {s['Время']}\n"
+        await cb.message.edit_text(text)
+    else:
+        await cb.message.edit_text(f"❌ Сервер: {result.get('message', 'ошибка')}")
 
     await state.clear()
-
 
 @router.callback_query(F.data == "contact")
 async def contact(cb: CallbackQuery):
@@ -246,13 +210,11 @@ async def contact(cb: CallbackQuery):
     ])
     await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
-
 # === FastAPI для webhook ===
 app = FastAPI()
 
 @app.on_event("startup")
 async def on_startup():
-    # Удаляем старый webhook и ставим новый
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook("https://bot-k7rs.onrender.com/webhook")  # замените на ваш Render-домен
 
