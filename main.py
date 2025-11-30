@@ -83,11 +83,11 @@ async def get_slots():
                     print("json.loads failed:", e2)
 
                 # 3) Грубый поиск JSON-блока {"slots":[...]}
-                m = re.search(r'(\{[^{}]*"slots"\s*:\s*
+                m = re.search(r'(\{[^{}]*"slots"\s*:\s*\[[\s\S]*?\]\s*\})', text)
 
-\[[\s\S]*?\]
+               
 
-\s*\})', text)
+                
 
 
 
