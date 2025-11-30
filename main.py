@@ -3,6 +3,7 @@ import os
 import logging
 import json
 import aiohttp
+import asyncio
 import pytz
 from datetime import datetime, timedelta, time
 from fastapi import FastAPI, Request
@@ -16,7 +17,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtNHEI30kUAnBXZBtYldQd5g6k-ANYsHnJ_bLokI-n9MqX_coozbiMjygG11xiVgc/exec"
+# WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtNHEI30kUAnBXZBtYldQd5g6k-ANYsHnJ_bLokI-n9MqX_coozbiMjygG11xiVgc/exec"
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+if not WEBAPP_URL:
+    raise ValueError("❌ WEBAPP_URL не задан в переменных окружения!")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -166,12 +170,16 @@ async def time(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Собираем данные для запроса
     service = data.get("service", "не указана")
     name = data.get("name", "—")
     phone = data.get("phone", "—")
     date_str = data.get("date")
-    tm = cb.data[5:]  # время из callback
+    tm = cb.data[5:]
+
+    if not date_str:
+        await cb.message.answer("❌ Не указана дата. Начните с /start.")
+        await state.clear()
+        return
 
     payload = {
         "Имя": name,
@@ -181,24 +189,39 @@ async def time(cb: CallbackQuery, state: FSMContext):
         "Время": tm
     }
 
-    # Отправляем POST на ваш Google Apps Script
-    async with aiohttp.ClientSession() as session:
-        async with session.post(WEBAPP_URL, json=payload) as resp:
-            result = await resp.json()
+    # ✅ 1. Добавляем таймаут (важно!)
+    timeout = aiohttp.ClientTimeout(total=10)  # макс 10 сек на весь запрос
 
-    # Проверяем ответ
-    if result.get("status") == "ok":
-        await cb.message.edit_text(result["message"])
-    elif result.get("status") == "busy":
-        text = result["message"]
-        suggestions = result.get("suggestions", [])
-        if suggestions:
-            text += "\n\nДоступные варианты:\n"
-            for s in suggestions:
-                text += f"• {s['Дата']} {s['Время']}\n"
-        await cb.message.edit_text(text)
-    else:
-        await cb.message.edit_text(f"❌ Ошибка: {result.get('message')}")
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(WEBAPP_URL, json=payload) as resp:
+                # ✅ 2. Ограничиваем чтение (защита от огромного ответа)
+                text = await resp.text()
+                try:
+                    result = json.loads(text)
+                except json.JSONDecodeError:
+                    result = {"status": "error", "message": f"Некорректный JSON: {text[:100]}..."}
+
+        # ✅ 3. Обрабатываем ответ
+        if result.get("status") == "ok":
+            await cb.message.edit_text(result["message"])
+        elif result.get("status") == "busy":
+            text = result["message"]
+            suggestions = result.get("suggestions", [])
+            if suggestions:
+                text += "\n\n💡 Доступные варианты:\n"
+                for s in suggestions[:3]:
+                    text += f"• {s['Дата']} в {s['Время']}\n"
+            await cb.message.edit_text(text)
+        else:
+            await cb.message.edit_text(f"❌ Ошибка: {result.get('message', 'неизвестная')}")
+
+    except asyncio.TimeoutError:
+        await cb.message.edit_text("⏳ Сервер не отвечает. Попробуйте через 10 секунд.")
+    except aiohttp.ClientError as e:
+        await cb.message.edit_text(f"📡 Ошибка связи: {e.__class__.__name__}")
+    except Exception as e:
+        await cb.message.edit_text(f"❗ Внутренняя ошибка: {str(e)[:100]}")
 
     await state.clear()
 
