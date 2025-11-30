@@ -109,7 +109,7 @@ def get_times_kb(date_str):
     while current < end_dt:
         if (current - datetime.now(TIMEZONE)).total_seconds() > 1800:
             slots.append(current.strftime("%H:%M"))
-        current += timedelta(minutes=60)
+        current += timedelta(minutes=30)
     if not slots:
         return None
     buttons = [[InlineKeyboardButton(text=t, callback_data=f"time_{t}")] for t in slots]
