@@ -14,6 +14,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 
+# Длительность услуг в часах (берётся из листа «Услуги»)
+DURATION_MAP = {
+    "Медицинская подология": 1.5,
+    "Эстетический маникюр": 1.0,
+    "Педикюр премиум": 2.0,
+    "Наращивание ресниц": 1.0,
+    "Коррекция бровей": 0.5,
+    "Прокалывание ушей": 0.5,
+    "Визаж Макияж": 1.0
+}
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например https://bot-k7rs.onrender.com/webhook
@@ -162,10 +173,11 @@ async def day(cb: CallbackQuery, state: FSMContext):
     else:
         await cb.answer("Нет свободного времени в этот день.", show_alert=True)
 
+
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data:
+    if not 
         await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
         await state.clear()
         return
@@ -181,47 +193,41 @@ async def time(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
+    # ✅ Добавляем ДлительностьЧасы
+    dur_hours = DURATION_MAP.get(service, 1.0)
+
     payload = {
         "Имя": name,
         "Телефон": phone,
         "Услуга": service,
         "Дата": date_str,
-        "Время": tm
+        "Время": tm,
+        "ДлительностьЧасы": dur_hours  # ← КЛЮЧЕВО!
     }
 
-    # ✅ 1. Добавляем таймаут (важно!)
-    timeout = aiohttp.ClientTimeout(total=10)  # макс 10 сек на весь запрос
-
     try:
+        timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(WEBAPP_URL, json=payload) as resp:
-                # ✅ 2. Ограничиваем чтение (защита от огромного ответа)
                 text = await resp.text()
-                try:
-                    result = json.loads(text)
-                except json.JSONDecodeError:
-                    result = {"status": "error", "message": f"Некорректный JSON: {text[:100]}..."}
+                result = json.loads(text)
 
-        # ✅ 3. Обрабатываем ответ
         if result.get("status") == "ok":
             await cb.message.edit_text(result["message"])
         elif result.get("status") == "busy":
             text = result["message"]
             suggestions = result.get("suggestions", [])
             if suggestions:
-                text += "\n\n💡 Доступные варианты:\n"
+                text += "\n\n💡 Предлагаем:\n"
                 for s in suggestions[:3]:
                     text += f"• {s['Дата']} в {s['Время']}\n"
             await cb.message.edit_text(text)
         else:
-            await cb.message.edit_text(f"❌ Ошибка: {result.get('message', 'неизвестная')}")
+            await cb.message.edit_text(f"❌ Сервер: {result.get('message', 'ошибка')}")
 
-    except asyncio.TimeoutError:
-        await cb.message.edit_text("⏳ Сервер не отвечает. Попробуйте через 10 секунд.")
-    except aiohttp.ClientError as e:
-        await cb.message.edit_text(f"📡 Ошибка связи: {e.__class__.__name__}")
     except Exception as e:
-        await cb.message.edit_text(f"❗ Внутренняя ошибка: {str(e)[:100]}")
+        await cb.message.edit_text("❌ Ошибка подключения. Попробуйте позже.")
+        print(f"❗ Исключение: {e}")
 
     await state.clear()
 
