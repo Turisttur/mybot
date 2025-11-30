@@ -54,9 +54,12 @@ async def get_slots():
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(WEBAPP_URL) as resp:
                 text = await resp.text()
-                # Проверяем, что ответ действительно JSON
+                print("doGet status:", resp.status)
+                print("doGet raw:", text[:200])  # лог первых 200 символов
                 result = json.loads(text)
-                return result.get("slots", [])
+                slots = result.get("slots", [])
+                print("Parsed slots sample:", slots[:5])
+                return slots
     except Exception as e:
         print(f"❌ Ошибка получения слотов: {e}")
         return []
@@ -64,6 +67,17 @@ async def get_slots():
 
 # === Клавиатуры ===
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def build_days_kb(slots: list[dict]) -> InlineKeyboardMarkup:
+    valid = [s for s in slots if "Дата" in s]
+    dates = sorted({s["Дата"] for s in valid})
+    buttons = []
+    for date in dates:
+        buttons.append([InlineKeyboardButton(text=date, callback_data=f"day_{date}")])
+    if not dates:
+        buttons.append([InlineKeyboardButton(text="Обновить", callback_data="refresh_days")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def build_times_kb(slots: list[dict], date: str) -> InlineKeyboardMarkup:
     # фильтруем слоты по выбранной дате
@@ -161,7 +175,12 @@ async def name(msg: Message, state: FSMContext):
 async def phone(msg: Message, state: FSMContext):
     await state.update_data(phone=msg.text)
     await state.set_state(Booking.choosing_day)
+
     slots = await get_slots()
+    if not slots:
+        await msg.answer("❌ Не удалось загрузить слоты. Попробуйте позже.")
+        return
+
     kb = build_days_kb(slots)
     await msg.answer("Выберите день:", reply_markup=kb)
 
