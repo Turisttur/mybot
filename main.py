@@ -63,31 +63,37 @@ async def get_slots():
 
 
 # === Клавиатуры ===
-def build_days_kb(slots):
-    buttons = []
-    dates = sorted(set(slot["Дата"] for slot in slots))
-    for date in dates:
-        buttons.append([InlineKeyboardButton(text=date, callback_data=f"day_{date}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+def build_times_kb(slots: list[dict], date: str) -> InlineKeyboardMarkup:
+    # фильтруем слоты по выбранной дате
+    day_slots = [s for s in slots if s.get("Дата") == date]
+    # сортируем по времени
+    day_slots.sort(key=lambda s: s.get("Время", ""))
 
-def build_times_kb(slots, date):
-    buttons = []
-    for slot in slots:
-        if slot["Дата"] == date:
-            if slot["status"] == "free":
-                buttons.append([InlineKeyboardButton(
-                    text=f"{slot['Время']} ✅",
-                    callback_data=f"time_{slot['Время']}"
-                )])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=f"{slot['Время']} ❌",
-                    callback_data="busy"
-                )])
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+
+    if not day_slots:
+        # если слотов нет
+        buttons.append([InlineKeyboardButton(text="Нет слотов на эту дату", callback_data="choose_day")])
+    else:
+        for s in day_slots:
+            # формируем подпись и callback
+            label = f"{s['Время']} ✅" if s["status"] == "free" else f"{s['Время']} ❌"
+            cbdata = f"time_{s['Время']}" if s["status"] == "free" else "busy"
+
+            row.append(InlineKeyboardButton(text=label, callback_data=cbdata))
+            if len(row) == 3:  # по 3 кнопки в ряд
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+    # кнопка назад
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 
 # === Отправка записи в WebApp ===
