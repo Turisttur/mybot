@@ -1,4 +1,4 @@
-# bot.py — ASEM PODO (webhook, 2 вида URL: SLOTS + BOOKING)
+# bot.py — ASEM PODO (исправленные слоты + кнопки-альтернативы)
 import os
 import json
 import logging
@@ -18,15 +18,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-SLOTS_URL = os.getenv("SLOTS_URL", "").strip()      # ← GET для слотов
-BOOKING_URL = os.getenv("BOOKING_URL", "").strip()  # ← POST для записи
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
 
-for name, val in [("BOT_TOKEN", BOT_TOKEN), ("WEBHOOK_URL", WEBHOOK_URL), 
+for name, val in [("BOT_TOKEN", BOT_TOKEN), ("WEBHOOK_URL", WEBHOOK_URL),
                   ("SLOTS_URL", SLOTS_URL), ("BOOKING_URL", BOOKING_URL)]:
     if not val:
-        raise ValueError(f"❌ {name} не задан в переменных окружения!")
+        raise ValueError(f"❌ {name} не задан")
 
-# Длительность услуг (часы)
 DURATION_MAP = {
     "Медицинская подология": 2.0,
     "Эстетический маникюр": 2.0,
@@ -49,7 +48,7 @@ class Booking(StatesGroup):
     choosing_day = State()
     choosing_time = State()
 
-# === Вспомогательные функции ===
+# === Утилиты ===
 def error_reload_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_days")],
@@ -58,9 +57,9 @@ def error_reload_kb() -> InlineKeyboardMarkup:
 
 def build_days_kb(slots: list[dict]) -> InlineKeyboardMarkup:
     dates = sorted({s["Дата"] for s in slots if s.get("Дата")})
-    buttons = [
-        [InlineKeyboardButton(text=d, callback_data=f"day_{d}")] for d in dates
-    ] or [[InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_days")]]
+    buttons = [[InlineKeyboardButton(text=d, callback_data=f"day_{d}")] for d in dates]
+    if not buttons:
+        buttons = [[InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_days")]]
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -154,7 +153,7 @@ async def phone(msg: Message, state: FSMContext):
 
     slots = await get_slots()
     if not slots:
-        await msg.answer("❌ Не удалось загрузить расписание. Попробуйте позже.", reply_markup=error_reload_kb())
+        await msg.answer("❌ Не удалось загрузить расписание.", reply_markup=error_reload_kb())
         return
 
     kb = build_days_kb(slots)
@@ -199,13 +198,52 @@ async def time(cb: CallbackQuery, state: FSMContext):
     if result.get("status") == "ok":
         await cb.message.edit_text(result["message"])
     elif result.get("status") == "busy":
-        text = "⛔ Это время занято. Предлагаем:\n\n"
-        for s in result.get("suggestions", [])[:3]:
-            text += f"• {s['Дата']} в {s['Время']}\n"
-        await cb.message.edit_text(text)
+        suggestions = result.get("suggestions", [])
+        if suggestions:
+            buttons = []
+            for s in suggestions:
+                # Формат: DD.MM.YYYY → преобразуем в YYYY-MM-DD для callback
+                iso_date = f"{s['Дата'][6:10]}-{s['Дата'][3:5]}-{s['Дата'][:2]}"
+                btn_text = f"{s['Дата']} в {s['Время']}"
+                cb_data = f"alt_{iso_date}_{s['Время']}"
+                buttons.append([InlineKeyboardButton(text=btn_text, callback_data=cb_data)])
+            buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await cb.message.edit_text("⛔ Это время занято. Предлагаем:", reply_markup=kb)
+        else:
+            await cb.message.edit_text("⛔ Нет свободных слотов в ближайшие дни.")
     else:
-        await cb.message.edit_text(f"❌ Ошибка сервера: {result.get('message', 'неизвестно')}")
+        await cb.message.edit_text(f"❌ Ошибка: {result.get('message', 'неизвестно')}")
 
+    await state.clear()
+
+# === НОВЫЙ ХЕНДЛЕР: выбор альтернативы ===
+@router.callback_query(F.data.startswith("alt_"))
+async def alt_time(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split("_", 2)
+    if len(parts) != 3:
+        await cb.answer("❌ Ошибка формата", show_alert=True)
+        return
+    
+    # alt_2025-12-02_10:30 → date="02.12.2025"
+    date_iso = parts[1]
+    time_str = parts[2]
+    date_display = f"{date_iso[8:10]}.{date_iso[5:7]}.{date_iso[:4]}"
+
+    data = await state.get_data()
+    result = await send_booking(
+        data.get("name", "—"),
+        data.get("phone", "—"),
+        data.get("service", "—"),
+        date_display,
+        time_str
+    )
+    
+    if result.get("status") == "ok":
+        await cb.message.edit_text(result["message"])
+    else:
+        await cb.message.edit_text(f"❌ Не удалось забронировать: {result.get('message', 'ошибка')}")
+    
     await state.clear()
 
 @router.callback_query(F.data == "contact")
@@ -216,6 +254,7 @@ async def contact(cb: CallbackQuery):
         "🕒 *Сб:* 10:00–18:00\n"
         "📱 +7 777 123 45 67"
         "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
+  
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
@@ -230,7 +269,6 @@ app = FastAPI()
 async def startup():
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
-    print(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -240,4 +278,4 @@ async def webhook(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "bot_id": bot.id}
+    return {"status": "ok"}
