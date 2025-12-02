@@ -282,3 +282,11 @@ async def healthz():
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "ASEM PODO Bot", "webhook": WEBHOOK_URL}  
+
+@app.head("/")
+async def head_root():
+    return {"status": "ok"}
+
+@app.head("/healthz")
+async def head_healthz():
+    return {"status": "ok"}
