@@ -279,3 +279,6 @@ async def webhook(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "ASEM PODO Bot", "webhook": WEBHOOK_URL}  
