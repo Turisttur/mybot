@@ -1,4 +1,4 @@
-# bot.py — ASEM PODO (исправленные слоты + кнопки-альтернативы)
+# bot.py — ASEM PODO (с перерывом 12:30–14:00)
 import os
 import json
 import logging
@@ -48,7 +48,7 @@ class Booking(StatesGroup):
     choosing_day = State()
     choosing_time = State()
 
-# === Утилиты ===
+# === Хелперы ===
 def error_reload_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_days")],
@@ -202,7 +202,6 @@ async def time(cb: CallbackQuery, state: FSMContext):
         if suggestions:
             buttons = []
             for s in suggestions:
-                # Формат: DD.MM.YYYY → преобразуем в YYYY-MM-DD для callback
                 iso_date = f"{s['Дата'][6:10]}-{s['Дата'][3:5]}-{s['Дата'][:2]}"
                 btn_text = f"{s['Дата']} в {s['Время']}"
                 cb_data = f"alt_{iso_date}_{s['Время']}"
@@ -217,7 +216,6 @@ async def time(cb: CallbackQuery, state: FSMContext):
 
     await state.clear()
 
-# === НОВЫЙ ХЕНДЛЕР: выбор альтернативы ===
 @router.callback_query(F.data.startswith("alt_"))
 async def alt_time(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split("_", 2)
@@ -225,7 +223,6 @@ async def alt_time(cb: CallbackQuery, state: FSMContext):
         await cb.answer("❌ Ошибка формата", show_alert=True)
         return
     
-    # alt_2025-12-02_10:30 → date="02.12.2025"
     date_iso = parts[1]
     time_str = parts[2]
     date_display = f"{date_iso[8:10]}.{date_iso[5:7]}.{date_iso[:4]}"
@@ -250,11 +247,10 @@ async def alt_time(cb: CallbackQuery, state: FSMContext):
 async def contact(cb: CallbackQuery):
     text = (
         "📍 *Аягоз, ул. Актамберды, 23*\n"
-        "🕒 *Пн–Пт:* 10:00–20:00\n"
-        "🕒 *Сб:* 10:00–18:00\n"
+        "🕒 *Пн–Пт:* 10:00–12:30, 14:00–20:00\n"
+        "🕒 *Сб:* 10:00–12:30, 14:00–18:00\n"
         "📱 +7 777 123 45 67"
         "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
-  
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
@@ -268,7 +264,7 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup():
     await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_webhook(WEBHOOK_URL)
+    await bot.set_webhook(WEBHOOK_URL.strip())
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -276,17 +272,12 @@ async def webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
 @app.get("/")
-async def root():
-    return {"status": "ok", "service": "ASEM PODO Bot", "webhook": WEBHOOK_URL}  
-
 @app.head("/")
-async def head_root():
-    return {"status": "ok"}
+async def root():
+    return {"status": "ok", "service": "ASEM PODO Bot"}
 
+@app.get("/healthz")
 @app.head("/healthz")
-async def head_healthz():
+async def healthz():
     return {"status": "ok"}
