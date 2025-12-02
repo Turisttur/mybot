@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: asem-podo-bot
+    env: python
+    region: oregon
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn bot:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: "/healthz"
+    healthCheckTimeout: 5
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: SLOTS_URL
+        sync: false
+      - key: BOOKING_URL
+        sync: false
