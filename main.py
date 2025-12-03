@@ -17,7 +17,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-WEBAPP_URL = os.getenv("BOOKING_URL", os.getenv("WEBAPP_URL", "")).strip()  # единый URL для записи
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN не задан")
