@@ -1,4 +1,4 @@
-# bot.py — ASEM PODO (финальная версия: никаких накладок, только рабочее время)
+# bot.py — ASEM PODO (финальная версия)
 import os
 import json
 import logging
@@ -13,17 +13,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# === Настройки ===
+# === 1. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (обязательно в начале!) ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
-BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()      # ← только для doGet
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()  # ← только для doPost
 
+# Проверка обязательных переменных
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN не задан")
+if not BOOKING_URL:
+    raise RuntimeError("❌ BOOKING_URL не задан")
+if not WEBHOOK_URL:
+    raise RuntimeError("❌ WEBHOOK_URL не задан")
 
-# Длительность услуг (часы)
+# Длительность услуг
 DURATION_MAP = {
     "Медицинская подология": 2.0,
     "Эстетический маникюр": 2.0,
@@ -34,6 +39,7 @@ DURATION_MAP = {
     "Визаж Макияж": 1.5
 }
 
+# === 2. ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
@@ -46,37 +52,34 @@ class Booking(StatesGroup):
     choosing_day = State()
     choosing_time = State()
 
-# === ГЕНЕРАЦИЯ ТОЛЬКО РАБОЧИХ СЛОТОВ (с перерывом) ===
+# === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
-    """Возвращает список ВРЕМЕННЫХ МЕТОК (HH:MM) для даты в формате '2025-12-03'."""
+    """Генерирует слоты ТОЛЬКО в рабочее время с перерывом 12:30–14:00"""
     day = datetime.fromisoformat(date_iso)
-    wd = day.weekday()  # 0=пн, 6=вс
-    
+    wd = day.weekday()
     if wd == 6:  # воскресенье — выходной
         return []
-
-    slots = []
     
-    # Утро: 10:00 → 12:30 (включительно), шаг 30 мин
-    current = day.replace(hour=10, minute=0, second=0, microsecond=0)
-    end_morning = day.replace(hour=12, minute=30, second=0, microsecond=0)
-    while current <= end_morning:
+    slots = []
+    # Утро: 10:00–12:30
+    current = day.replace(hour=10, minute=0)
+    end = day.replace(hour=12, minute=30)
+    while current <= end:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
     
-    # Вечер: 14:00 → 20:00 (пн–пт) или 18:00 (сб)
+    # Вечер: 14:00–20:00 (пн–пт) или 18:00 (сб)
     end_hour = 20 if wd < 5 else 18
-    current = day.replace(hour=14, minute=0, second=0, microsecond=0)
-    end_evening = day.replace(hour=end_hour, minute=0, second=0, microsecond=0)
-    while current < end_evening:
+    current = day.replace(hour=14, minute=0)
+    end = day.replace(hour=end_hour, minute=0)
+    while current < end:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
     
     return slots
 
-# === ОТПРАВКА В СТАРЫЙ APPS SCRIPT (формат dd.MM.yyyy) ===
-async def send_to_webapp(name: str, phone: str, service: str, date_iso: str, time_str: str):
-    # Преобразуем 2025-12-03 → 03.12.2025
+async def send_booking(name: str, phone: str, service: str, date_iso: str, time_str: str):
+    # Преобразуем 2025-12-03 → 03.12.2025 для Apps Script
     dt = datetime.fromisoformat(date_iso)
     date_display = dt.strftime("%d.%m.%Y")
     
@@ -84,27 +87,21 @@ async def send_to_webapp(name: str, phone: str, service: str, date_iso: str, tim
         "Имя": name.strip(),
         "Телефон": phone.strip(),
         "Услуга": service.strip(),
-        "Дата": date_display,        # ← критично для старого Apps Script
-        "Время": time_str,           # ← "10:00", "14:30"
+        "Дата": date_display,        # ← формат, который ожидает ваш Apps Script
+        "Время": time_str,
         "ДлительностьЧасы": DURATION_MAP.get(service, 1.0)
     }
-
+    
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(WEBAPP_URL, json=payload) as resp:
-                text = await resp.text()
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    # Логируем сырой ответ при ошибке
-                    print(f"⚠️ Не JSON от WebApp: {text[:200]}")
-                    return {"status": "error", "message": "Некорректный ответ от сервера"}
+            async with session.post(BOOKING_URL, json=payload) as resp:
+                return await resp.json()
     except Exception as e:
-        print(f"❌ WebApp exception: {e}")
-        return {"status": "error", "message": f"Ошибка подключения: {e}"}
+        logging.error(f"❌ send_booking error: {e}")
+        return {"status": "error", "message": str(e)}
 
-# === ХЭНДЛЕРЫ ===
+# === 4. ХЭНДЛЕРЫ ===
 @router.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
     await state.clear()
@@ -117,10 +114,8 @@ async def start(msg: Message, state: FSMContext):
 @router.callback_query(F.data == "book")
 async def book(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Booking.choosing_service)
-    buttons = [
-        [InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] 
-        for t in DURATION_MAP.keys()
-    ] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]]
+    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP.keys()]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
     await cb.message.edit_text("Выберите услугу:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("srv_"))
@@ -141,7 +136,7 @@ async def phone(msg: Message, state: FSMContext):
     await state.update_data(phone=msg.text)
     await state.set_state(Booking.choosing_day)
     
-    # Генерация 14 дней вперёд (только будни и сб)
+    # Генерация дней (только пн–сб)
     today = datetime.now()
     buttons = []
     for i in range(14):
@@ -149,31 +144,30 @@ async def phone(msg: Message, state: FSMContext):
         if day.weekday() == 6:  # воскресенье — пропускаем
             continue
         text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-        date_key = day.strftime("%Y-%m-%d")
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{date_key}")])
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await msg.answer("Выберите день:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
-    date_iso = cb.data[4:]  # 2025-12-03
+    date_iso = cb.data[4:]
     await state.update_data(date=date_iso)
     await state.set_state(Booking.choosing_time)
     
-    slots = get_working_slots(date_iso)  # ← ТОЛЬКО 10:00–12:30 и 14:00–...
+    slots = get_working_slots(date_iso)
     buttons = []
     for i in range(0, len(slots), 3):
         row = [InlineKeyboardButton(text=t, callback_data=f"time_{t}") for t in slots[i:i+3]]
         buttons.append(row)
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await cb.message.edit_text(f"Выберите время на {date_iso}:", reply_markup=kb)
+    await cb.message.edit_text(f"Выберите время:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data:
+    if not data:  # ✅ ИСПРАВЛЕНО: if not data
         await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
         await state.clear()
         return
@@ -182,16 +176,10 @@ async def time(cb: CallbackQuery, state: FSMContext):
     name = data.get("name", "—")
     phone = data.get("phone", "—")
     date_iso = data.get("date", "—")
-    time_str = cb.data[5:]  # "10:00"
+    time_str = cb.data[5:]
 
-    # ✅ Проверка: не попали ли мы в перерыв (должно быть невозможно, но на всякий)
-    hour = int(time_str.split(':')[0])
-    minute = int(time_str.split(':')[1])
-    if (12 <= hour < 14) or (hour == 12 and minute >= 30):
-        await cb.answer("❌ Это время в перерыве. Выберите другое.", show_alert=True)
-        return
-
-    result = await send_to_webapp(name, phone, service, date_iso, time_str)
+    # Отправка в Apps Script
+    result = await send_booking(name, phone, service, date_iso, time_str)
 
     if result.get("status") == "ok":
         # Подтверждение клиенту
@@ -204,10 +192,53 @@ async def time(cb: CallbackQuery, state: FSMContext):
             f"🆕 Новая запись!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}\n👤 {name}\n📱 {phone}"
         )
     elif result.get("status") == "busy":
-        await cb.message.edit_text("⛔ Это время занято. Выберите другое.")
+        suggestions = result.get("suggestions", [])
+        if suggestions:
+            buttons = []
+            for s in suggestions[:3]:
+                # Формат: Дата — dd.MM.yyyy → преобразуем в ISO для кнопки
+                iso_date = f"{s['Дата'][6:10]}-{s['Дата'][3:5]}-{s['Дата'][:2]}"
+                btn_text = f"{s['Дата']} в {s['Время']}"
+                cb_data = f"alt_{iso_date}_{s['Время']}"
+                buttons.append([InlineKeyboardButton(text=btn_text, callback_data=cb_data)])
+            buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await cb.message.edit_text("⛔ Это время занято. Предлагаем:", reply_markup=kb)
+        else:
+            await cb.message.edit_text("⛔ Нет свободных слотов в ближайшие дни.")
     else:
         await cb.message.edit_text(f"❌ Ошибка сервера: {result.get('message', 'неизвестно')}")
 
+    await state.clear()
+
+@router.callback_query(F.data.startswith("alt_"))
+async def alt_time(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split("_", 2)
+    if len(parts) != 3:
+        await cb.answer("❌ Ошибка формата", show_alert=True)
+        return
+    
+    date_iso = parts[1]
+    time_str = parts[2]
+    
+    # Преобразуем обратно в dd.MM.yyyy для отправки
+    dt = datetime.fromisoformat(date_iso)
+    date_display = dt.strftime("%d.%m.%Y")
+    
+    data = await state.get_data()
+    result = await send_booking(
+        data.get("name", "—"),
+        data.get("phone", "—"),
+        data.get("service", "—"),
+        date_display,  # ← dd.MM.yyyy
+        time_str
+    )
+    
+    if result.get("status") == "ok":
+        await cb.message.edit_text(result["message"])
+    else:
+        await cb.message.edit_text(f"❌ Не удалось забронировать: {result.get('message', 'ошибка')}")
+    
     await state.clear()
 
 @router.callback_query(F.data == "contact")
@@ -225,7 +256,7 @@ async def contact(cb: CallbackQuery):
     ])
     await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
-# === FastAPI (для Render) ===
+# === 5. FASTAPI (для Render) ===
 app = FastAPI()
 
 @app.on_event("startup")
@@ -239,7 +270,7 @@ async def webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# Health-check (обязательно для Render)
+# Health-check для Render (обязательно!)
 @app.get("/healthz")
 @app.head("/healthz")
 async def healthz():
