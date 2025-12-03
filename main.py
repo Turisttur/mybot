@@ -1,4 +1,4 @@
-# bot.py — ASEM PODO (финальная версия)
+# bot.py — ASEM PODO (финал: никаких ошибок, только рабочее время)
 import os
 import json
 import logging
@@ -17,8 +17,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-SLOTS_URL = os.getenv("SLOTS_URL", "").strip()      # ← только для doGet
-BOOKING_URL = os.getenv("BOOKING_URL", "").strip()  # ← только для doPost
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()      # для GET / doGet
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()  # для POST / doPost
 
 # Проверка обязательных переменных
 if not BOT_TOKEN:
@@ -28,7 +28,7 @@ if not BOOKING_URL:
 if not WEBHOOK_URL:
     raise RuntimeError("❌ WEBHOOK_URL не задан")
 
-# Длительность услуг
+# Длительность услуг (часы)
 DURATION_MAP = {
     "Медицинская подология": 2.0,
     "Эстетический маникюр": 2.0,
@@ -54,7 +54,7 @@ class Booking(StatesGroup):
 
 # === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
-    """Генерирует слоты ТОЛЬКО в рабочее время с перерывом 12:30–14:00"""
+    """Генерирует слоты ТОЛЬКО в рабочее время: 10:00–12:30, 14:00–20:00/18:00"""
     day = datetime.fromisoformat(date_iso)
     wd = day.weekday()
     if wd == 6:  # воскресенье — выходной
@@ -78,16 +78,16 @@ def get_working_slots(date_iso: str) -> list[str]:
     
     return slots
 
-async def send_booking(name: str, phone: str, service: str, date_iso: str, time_str: str):
-    # Преобразуем 2025-12-03 → 03.12.2025 для Apps Script
-    dt = datetime.fromisoformat(date_iso)
-    date_display = dt.strftime("%d.%m.%Y")
-    
+async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str):
+    """
+    Отправляет запись в Apps Script.
+    date_display — ОБЯЗАТЕЛЬНО в формате '04.12.2025' (dd.MM.yyyy)
+    """
     payload = {
         "Имя": name.strip(),
         "Телефон": phone.strip(),
         "Услуга": service.strip(),
-        "Дата": date_display,        # ← формат, который ожидает ваш Apps Script
+        "Дата": date_display,        # ← ожидает dd.MM.yyyy
         "Время": time_str,
         "ДлительностьЧасы": DURATION_MAP.get(service, 1.0)
     }
@@ -151,7 +151,7 @@ async def phone(msg: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
-    date_iso = cb.data[4:]
+    date_iso = cb.data[4:]  # 2025-12-04
     await state.update_data(date=date_iso)
     await state.set_state(Booking.choosing_time)
     
@@ -167,7 +167,7 @@ async def day(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data:  # ✅ ИСПРАВЛЕНО: if not data
+    if not data:  # ✅ ИСПРАВЛЕНО: if not data → if not data:
         await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
         await state.clear()
         return
@@ -175,18 +175,18 @@ async def time(cb: CallbackQuery, state: FSMContext):
     service = data.get("service", "—")
     name = data.get("name", "—")
     phone = data.get("phone", "—")
-    date_iso = data.get("date", "—")
-    time_str = cb.data[5:]
+    date_iso = data.get("date", "—")  # 2025-12-04
+    time_str = cb.data[5:]            # 10:00
+
+    # Преобразуем 2025-12-04 → 04.12.2025 для Apps Script
+    dt = datetime.fromisoformat(date_iso)
+    date_display = dt.strftime("%d.%m.%Y")
 
     # Отправка в Apps Script
-    result = await send_booking(name, phone, service, date_iso, time_str)
+    result = await send_booking(name, phone, service, date_display, time_str)
 
     if result.get("status") == "ok":
-        # Подтверждение клиенту
-        dt = datetime.fromisoformat(date_iso)
-        date_display = dt.strftime("%d.%m.%Y")
         await cb.message.edit_text(f"✅ Запись подтверждена!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}")
-        # Уведомление админу
         await bot.send_message(
             ADMIN_CHAT_ID,
             f"🆕 Новая запись!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}\n👤 {name}\n📱 {phone}"
@@ -196,9 +196,10 @@ async def time(cb: CallbackQuery, state: FSMContext):
         if suggestions:
             buttons = []
             for s in suggestions[:3]:
-                # Формат: Дата — dd.MM.yyyy → преобразуем в ISO для кнопки
-                iso_date = f"{s['Дата'][6:10]}-{s['Дата'][3:5]}-{s['Дата'][:2]}"
+                # Используем дату как есть из Apps Script (dd.MM.yyyy)
                 btn_text = f"{s['Дата']} в {s['Время']}"
+                # Для callback сохраняем ISO
+                iso_date = f"{s['Дата'][6:10]}-{s['Дата'][3:5]}-{s['Дата'][:2]}"
                 cb_data = f"alt_{iso_date}_{s['Время']}"
                 buttons.append([InlineKeyboardButton(text=btn_text, callback_data=cb_data)])
             buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
@@ -218,10 +219,11 @@ async def alt_time(cb: CallbackQuery, state: FSMContext):
         await cb.answer("❌ Ошибка формата", show_alert=True)
         return
     
+    # parts[1] = YYYY-MM-DD, parts[2] = HH:mm
     date_iso = parts[1]
     time_str = parts[2]
     
-    # Преобразуем обратно в dd.MM.yyyy для отправки
+    # Преобразуем в dd.MM.yyyy для отправки
     dt = datetime.fromisoformat(date_iso)
     date_display = dt.strftime("%d.%m.%Y")
     
