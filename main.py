@@ -16,7 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # === Настройки (замените на свои) ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8454009227:AAEV5eAl8L3pxUC_JQa6FI8dsJAZ2yHtdQc")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://asem-podo-bot.onrender.com/webhook").strip()
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://bot-k7rs.onrender.com/webhook").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwYowZ-08UQL1Dh0HorTcBB9liso9l64eiuplqPqspwX66YCXMR8DLQWNhVcjNoTB0p/exec").strip()
 
 if not BOT_TOKEN or "YOUR_TOKEN" in BOT_TOKEN:
@@ -136,7 +136,7 @@ async def day(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not 
+    if not  data:
         await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
         await state.clear()
         return
