@@ -1,4 +1,6 @@
 # bot.py — ASEM PODO (финал: никаких ошибок, только рабочее время)
+import zoneinfo
+TZ = zoneinfo.ZoneInfo("Asia/Almaty")
 import os
 import json
 import logging
@@ -125,19 +127,15 @@ async def srv(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Booking.entering_name)
     await cb.message.edit_text("Введите ваше имя:")
 
-@router.message(Booking.entering_name)
-async def name(msg: Message, state: FSMContext):
-    await state.update_data(name=msg.text)
-    await state.set_state(Booking.entering_phone)
-    await msg.answer("Введите ваш телефон:")
-
 @router.message(Booking.entering_phone)
 async def phone(msg: Message, state: FSMContext):
     await state.update_data(phone=msg.text)
     await state.set_state(Booking.choosing_day)
     
-    # Генерация дней (только пн–сб), с фильтрацией: исключаем "Сегодня", если слотов уже нет
-    now = datetime.now()
+    # Локальное время (Алматы / Астана — UTC+5)
+    now = datetime.now(TZ).replace(tzinfo=None)  # naive datetime в локальном времени
+    # await msg.answer(f"🕒 Локальное время: {now.strftime('%d.%m %H:%M')}")  # отладка — можно временно раскомментировать
+
     buttons = []
 
     for i in range(14):
@@ -145,20 +143,19 @@ async def phone(msg: Message, state: FSMContext):
         if day.weekday() == 6:  # воскресенье — пропускаем
             continue
 
-        # Для текущего дня — проверяем, есть ли ещё свободные слоты *после текущего времени*
         if i == 0:
             date_iso = day.strftime("%Y-%m-%d")
             slots_today = get_working_slots(date_iso)
-            current_time_str = now.strftime("%H:%M")
+            current_time_str = now.strftime("%H:%M")  # напр. "22:00"
             future_slots = [s for s in slots_today if s > current_time_str]
             if not future_slots:
-                continue  # пропускаем "Сегодня", если слотов нет
+                continue  # пропускаем "Сегодня"
 
         text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
 
     if not buttons:
-        await msg.answer("К сожалению, свободных дней нет в ближайшие 2 недели. Попробуйте позже.")
+        await msg.answer("К сожалению, свободных дней нет в ближайшие 2 недели.")
         await state.clear()
         return
 
