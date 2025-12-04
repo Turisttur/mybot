@@ -137,25 +137,34 @@ async def phone(msg: Message, state: FSMContext):
     await state.set_state(Booking.choosing_day)
     
     # Генерация дней (только пн–сб), с фильтрацией: исключаем "Сегодня", если слотов уже нет
-now = datetime.now()
-buttons = []
+    now = datetime.now()
+    buttons = []
 
-for i in range(14):
-    day = now + timedelta(days=i)
-    if day.weekday() == 6:  # воскресенье — пропускаем
-        continue
+    for i in range(14):
+        day = now + timedelta(days=i)
+        if day.weekday() == 6:  # воскресенье — пропускаем
+            continue
 
-    # Для текущего дня — проверяем, есть ли ещё свободные слоты *после текущего времени*
-    if i == 0:
-        slots_today = get_working_slots(day.strftime("%Y-%m-%d"))
-        # Фильтруем слоты, оставляя только те, что строго позже текущего времени
-        current_time_str = now.strftime("%H:%M")
-        future_slots = [s for s in slots_today if s > current_time_str]
-        if not future_slots:
-            continue  # пропускаем "Сегодня", если слотов нет
+        # Для текущего дня — проверяем, есть ли ещё свободные слоты *после текущего времени*
+        if i == 0:
+            date_iso = day.strftime("%Y-%m-%d")
+            slots_today = get_working_slots(date_iso)
+            current_time_str = now.strftime("%H:%M")
+            future_slots = [s for s in slots_today if s > current_time_str]
+            if not future_slots:
+                continue  # пропускаем "Сегодня", если слотов нет
 
-    text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-    buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
+        text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
+
+    if not buttons:
+        await msg.answer("К сожалению, свободных дней нет в ближайшие 2 недели. Попробуйте позже.")
+        await state.clear()
+        return
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await msg.answer("Выберите день:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
