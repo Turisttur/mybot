@@ -282,7 +282,7 @@ async def day(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not 
+    if not data:
         await cb.message.answer("⚠️ Сессия устарела. Начните с /start.")
         await state.clear()
         return
