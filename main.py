@@ -21,6 +21,29 @@ logger = logging.getLogger(__name__)
 try:
     import zoneinfo
     TZ = zoneinfo.ZoneInfo("Asia/Almaty")
+except ImportError:# main.py — ASEM PODO (финальная версия для Render, 06.12.2025)
+# Совместим с aiogram 3.13+, Python 3.10+
+import os
+import json
+import logging
+from datetime import datetime, timedelta
+import asyncio
+import aiohttp
+from fastapi import FastAPI, Request
+from aiogram import Bot, Dispatcher, Router, F, types
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+# === 0. ЛОГГИРОВАНИЕ И ЧАСОВОЙ ПОЯС ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+try:
+    import zoneinfo
+    TZ = zoneinfo.ZoneInfo("Asia/Almaty")
 except ImportError:
     from datetime import timezone
     TZ = timezone(timedelta(hours=5))
@@ -64,10 +87,10 @@ class Booking(StatesGroup):
 
 # === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
-    """Генерирует слоты БЕЗ 12:30, 18:00, 20:00 (последний слот — 12:00, 17:30, 19:30)."""
+    """Генерирует слоты: 10:00–12:00, 14:00–19:30 (пн–пт), 14:00–17:30 (сб)."""
     day = datetime.fromisoformat(date_iso)
-    wd = day.weekday()  # 0 = пн, 6 = вс
-    if wd == 6:  # воскресенье
+    wd = day.weekday()  # 0=пн, 6=вс
+    if wd == 6:  # воскресенье — выходной
         return []
     
     slots = []
@@ -78,7 +101,7 @@ def get_working_slots(date_iso: str) -> list[str]:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
     
-    # Вечер: 14:00–20:00 (пн–пт) или 18:00 (сб)
+    # Вечер: до 20:00 (пн–пт) или 18:00 (сб)
     end_hour = 20 if wd < 5 else 18
     current = day.replace(hour=14, minute=0, second=0, microsecond=0)
     end = day.replace(hour=end_hour, minute=0)
@@ -97,30 +120,29 @@ async def fetch_free_slots(date_iso: str) -> list[str]:
         timeout = aiohttp.ClientTimeout(total=6)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             url = f"{SLOTS_URL}?date={date_iso}"
-            logger.info(f"📡 {url}")
+            logger.info(f"📡 Запрос: {url}")
             async with session.get(url) as resp:
                 text = await resp.text()
                 if resp.status != 200:
                     logger.error(f"❌ SLOTS_URL {resp.status}: {text[:120]}")
                     return working_slots
-
                 data = json.loads(text)
-                logger.info(f"📥 Ответ: {data}")
+                logger.info(f"📥 Ответ: {len(data.get('slots', []))} слотов")
 
-                # Поддержка формата Code.gs: {"slots": [{"Время":"10:00","status":"free"}, ...]}
+                # Поддержка формата: {"slots": [{"Время":"10:00","status":"free"}, ...]}
                 if "slots" in data and isinstance(data["slots"], list):
                     free_times = [
                         str(item.get("Время", "")).strip()
                         for item in data["slots"]
                         if str(item.get("status", "")).lower() == "free"
                     ]
+                    # Фильтруем по рабочему времени (защита от мусора)
                     return [t for t in free_times if t in working_slots]
 
-                # Fallback
                 return working_slots
 
     except Exception as e:
-        logger.error(f"💥 SLOTS_URL error: {e}")
+        logger.error(f"💥 Ошибка SLOTS_URL: {e}")
         return working_slots
 
 async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str):
@@ -162,7 +184,8 @@ async def book(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("srv_"))
 async def srv(cb: CallbackQuery, state: FSMContext):
-    await state.update_data(service=cb.data[4:])
+    service = cb.data[4:]
+    await state.update_data(service=service)
     await state.set_state(Booking.entering_name)
     await cb.message.edit_text("Введите ваше имя:")
 
@@ -184,50 +207,66 @@ async def phone(msg: Message, state: FSMContext):
     if not (msg.text and msg.text.strip()):
         await msg.answer("❌ Введите телефон текстом.")
         return
-    await state.update_data(phone=msg.text.strip())
+    phone_clean = msg.text.strip()
+    digits = "".join(filter(str.isdigit, phone_clean))
+    if len(digits) < 8:
+        await msg.answer("❌ Номер слишком короткий.")
+        return
+    await state.update_data(phone=phone_clean)
     await state.set_state(Booking.choosing_day)
 
     now = datetime.now(TZ).replace(tzinfo=None)
     buttons = []
     for i in range(14):
         day = now + timedelta(days=i)
-        if day.weekday() == 6:
+        if day.weekday() == 6:  # воскресенье — пропускаем
             continue
         if i == 0:
-            slots = await fetch_free_slots(day.strftime("%Y-%m-%d"))
-            future = [s for s in slots if s > now.strftime("%H:%M")]
-            if not future:
+            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
+            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
+            if not future_slots:
                 continue
         text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
+        buttons.append([
+            InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")
+        ])
 
     if not buttons:
         await msg.answer("🕗 Нет свободных дней.")
         await state.clear()
         return
 
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    await msg.answer("📅 Выберите день:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="main")
+    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await msg.answer("📅 Выберите день:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
-    logger.info(f"✅ day handler triggered: {cb.data}")
     date_iso = cb.data[4:]
     await state.update_data(date=date_iso)
     await state.set_state(Booking.choosing_time)
 
     slots = await fetch_free_slots(date_iso)
-    logger.info(f"📅 {date_iso} → slots: {slots}")
+    logger.info(f"📅 {date_iso} → слотов: {len(slots)}")
 
     if not slots:
-        await cb.answer("🕗 Нет свободных слотов", show_alert=True)
+        await cb.message.edit_text("🕗 В этот день нет свободных слотов. Выберите другой день.")
         return
 
-    # Простая клавиатура — 1 кнопка
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("10:00", callback_data="time_10:00")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="choose_day")]
+    # Генерация кнопок по 3 в ряд
+    buttons = []
+    for i in range(0, len(slots), 3):
+        row = [
+            InlineKeyboardButton(text=t, callback_data=f"time_{t}")
+            for t in slots[i:i+3]
+        ]
+        buttons.append(row)
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")
     ])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await cb.message.edit_text("Выберите время:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("time_"))
@@ -245,15 +284,16 @@ async def time(cb: CallbackQuery, state: FSMContext):
     time_str = cb.data[5:]
 
     if not all([service, name, phone, date_iso]):
-        await cb.message.edit_text("⚠️ Данные утеряны. /start")
+        await cb.message.edit_text("⚠️ Данные утеряны. Начните с /start.")
         await state.clear()
         return
 
     try:
         dt = datetime.fromisoformat(date_iso)
         date_display = dt.strftime("%d.%m.%Y")
-    except:
-        await cb.message.edit_text("❌ Ошибка даты.")
+    except Exception as e:
+        logger.error(f"📅 Ошибка даты: {e}")
+        await cb.message.edit_text("❌ Некорректная дата.")
         await state.clear()
         return
 
@@ -261,7 +301,10 @@ async def time(cb: CallbackQuery, state: FSMContext):
 
     if result.get("status") == "ok":
         await cb.message.edit_text(f"✅ Запись подтверждена!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}")
-        await bot.send_message(ADMIN_CHAT_ID, f"🆕 {service} | {name} | {phone} | {date_display} {time_str}")
+        await bot.send_message(
+            ADMIN_CHAT_ID,
+            f"🆕 Новая запись!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}\n👤 {name}\n📱 {phone}"
+        )
         await state.clear()
     else:
         msg = result.get("message", "ошибка сервера")
@@ -275,11 +318,10 @@ async def contact(cb: CallbackQuery):
         "🕒 *Пн–Пт:* 10:00–12:30, 14:00–20:00\n"
         "🕒 *Сб:* 10:00–12:30, 14:00–18:00\n"
         "📱 +7 777 123 45 67"
-        "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("💬 WhatsApp", url="https://wa.me/77771234567")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="main")]
+        [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
     ])
     await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
@@ -287,28 +329,66 @@ async def contact(cb: CallbackQuery):
 async def back_to_main(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("📅 Записаться", callback_data="book")],
-        [InlineKeyboardButton("📞 Контакты", callback_data="contact")]
+        [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
     ])
     await cb.message.edit_text("🌸 Добро пожаловать в ASEM PODO @ BEAUTY!", reply_markup=kb)
 
 @router.callback_query(F.data == "choose_day")
 async def back_to_days(cb: CallbackQuery, state: FSMContext):
-    await phone(cb.message, state)  # переиспользуем логику
+    data = await state.get_data()
+    required = {"service", "name", "phone"}
+    if not (required <= set(data.keys())):
+        await cb.message.edit_text("⚠️ Данные утеряны. Начните с /start.")
+        await state.clear()
+        return
 
-# === 5. FASTAPI ===
+    now = datetime.now(TZ).replace(tzinfo=None)
+    buttons = []
+    for i in range(14):
+        day = now + timedelta(days=i)
+        if day.weekday() == 6:
+            continue
+        if i == 0:
+            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
+            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
+            if not future_slots:
+                continue
+        text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
+        buttons.append([
+            InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="main")
+    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await cb.message.edit_text("Выберите день:", reply_markup=kb)
+
+# === 5. FASTAPI (для Render) ===
 app = FastAPI()
 
 @app.on_event("startup")
 async def startup():
+    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
+    logger.info("✅ Бот запущен. Webhook установлен.")
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    update = types.Update(**await request.json())
-    await dp.feed_update(bot, update)
-    return {"ok": True}
+    try:
+        update = types.Update(**await request.json())
+        await dp.feed_update(bot, update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"🚨 Webhook error: {e}")
+        return {"ok": False, "error": str(e)}
 
 @app.get("/healthz")
+@app.head("/healthz")
 async def healthz():
+    return {"status": "ok"}
+
+@app.get("/")
+@app.head("/")
+async def root():
     return {"status": "ok"}
