@@ -211,15 +211,24 @@ async def phone(msg: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
+    logger.info(f"✅ day handler triggered: {cb.data}")
     date_iso = cb.data[4:]
     await state.update_data(date=date_iso)
+    await state.set_state(Booking.choosing_time)
+
     slots = await fetch_free_slots(date_iso)
+    logger.info(f"📅 {date_iso} → slots: {slots}")
+
     if not slots:
-        await cb.message.edit_text("🕗 В этот день нет свободных слотов.")
+        await cb.answer("🕗 Нет свободных слотов", show_alert=True)
         return
-    buttons = [[InlineKeyboardButton(t, callback_data=f"time_{t}") for t in slots[i:i+3]] for i in range(0, len(slots), 3)]
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="choose_day")])
-    await cb.message.edit_text("Выберите время:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+    # Простая клавиатура — 1 кнопка
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton("10:00", callback_data="time_10:00")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="choose_day")]
+    ])
+    await cb.message.edit_text("Выберите время:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
