@@ -100,28 +100,35 @@ async def fetch_free_slots(date_iso: str) -> list[str]:
         timeout = aiohttp.ClientTimeout(total=6)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             url = f"{SLOTS_URL}?date={date_iso}"
-            logger.info(f"📡 {url}")
+            logger.info(f"📡 Запрос: {url}")
             async with session.get(url) as resp:
                 text = await resp.text()
                 if resp.status != 200:
                     logger.error(f"❌ SLOTS_URL {resp.status}: {text[:120]}")
                     return working_slots
-                data = json.loads(text)
 
+                data = json.loads(text)
+                logger.info(f"📥 Ответ: {len(data.get('slots', []))} записей")
+
+                # Фильтруем: только слоты с Дата == date_iso и status == 'free'
                 free_times = []
                 if "slots" in data and isinstance(data["slots"], list):
                     for item in data["slots"]:
                         slot_date = str(item.get("Дата", "")).strip()
                         slot_time = str(item.get("Время", "")).strip()
                         status = str(item.get("status", "")).lower()
-                        # 🔹 Только запрошенная дата и статус free
                         if slot_date == date_iso and status == "free":
                             free_times.append(slot_time)
 
+                # Если данных нет — возвращаем рабочие слоты как fallback
+                if not free_times:
+                    return working_slots
+
+                # Фильтруем по рабочему времени (защита от мусора)
                 return [t for t in free_times if t in working_slots]
 
     except Exception as e:
-        logger.error(f"💥 fetch_free_slots error: {e}")
+        logger.error(f"💥 Ошибка SLOTS_URL: {e}")
         return working_slots
 
 async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str):
