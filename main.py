@@ -1,5 +1,5 @@
-# bot_final.py — ASEM PODO (стабильная версия, 05.12.2025)
-# Работает с SLOTS_URL (doGet) и BOOKING_URL (doPost)
+# bot.py — ASEM PODO (финал: 06.12.2025)
+# Полностью совместим с Code.gs выше
 import os
 import json
 import logging
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import zoneinfo
-    TZ = zoneinfo.ZoneInfo("Asia/Almaty")  # UTC+5 — Казахстан
+    TZ = zoneinfo.ZoneInfo("Asia/Almaty")
 except ImportError:
     from datetime import timezone
     TZ = timezone(timedelta(hours=5))
@@ -29,8 +29,8 @@ except ImportError:
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-SLOTS_URL = os.getenv("SLOTS_URL", "").strip()      # ← обязателен для стабильности
-BOOKING_URL = os.getenv("BOOKING_URL", "").strip()  # ← для записи
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN не задан")
@@ -38,8 +38,6 @@ if not BOOKING_URL:
     raise RuntimeError("❌ BOOKING_URL не задан")
 if not WEBHOOK_URL:
     raise RuntimeError("❌ WEBHOOK_URL не задан")
-if not SLOTS_URL:
-    logger.warning("⚠️ SLOTS_URL не задан — будет использоваться только расписание (риск занятых слотов).")
 
 DURATION_MAP = {
     "Медицинская подология": 2.0,
@@ -66,17 +64,17 @@ class Booking(StatesGroup):
 
 # === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
-    """Генерирует ВСЕ рабочие слоты (без учёта занятости)."""
+    """Генерирует слоты БЕЗ 12:30, 18:00, 20:00 (последний слот — 12:00, 17:30, 19:30)."""
     day = datetime.fromisoformat(date_iso)
-    wd = day.weekday()
-    if wd == 6:  # воскресенье — выходной
+    wd = day.weekday()  # 0 = пн, 6 = вс
+    if wd == 6:  # воскресенье
         return []
     
     slots = []
-    # Утро: 10:00–12:30
+    # Утро: 10:00 → 12:00 (12:30 — перерыв!)
     current = day.replace(hour=10, minute=0, second=0, microsecond=0)
     end = day.replace(hour=12, minute=30)
-    while current <= end:
+    while current < end:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
     
@@ -91,52 +89,41 @@ def get_working_slots(date_iso: str) -> list[str]:
     return slots
 
 async def fetch_free_slots(date_iso: str) -> list[str]:
-    """Возвращает ТОЛЬКО свободные слоты: рабочие минус занятые (из SLOTS_URL)."""
     working_slots = get_working_slots(date_iso)
-    if not working_slots:
-        return []
-
-    # Если SLOTS_URL не задан — fallback на расписание (но это рискованно)
-    if not SLOTS_URL:
+    if not working_slots or not SLOTS_URL:
         return working_slots
 
     try:
         timeout = aiohttp.ClientTimeout(total=6)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             url = f"{SLOTS_URL}?date={date_iso}"
-            logger.info(f"📡 Запрос свободных слотов: {url}")
+            logger.info(f"📡 {url}")
             async with session.get(url) as resp:
                 text = await resp.text()
                 if resp.status != 200:
-                    logger.error(f"❌ SLOTS_URL {resp.status}: {text[:200]}")
+                    logger.error(f"❌ SLOTS_URL {resp.status}: {text[:120]}")
                     return working_slots
 
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    logger.error(f"❌ Некорректный JSON от SLOTS_URL: {text[:200]}")
-                    return working_slots
+                data = json.loads(text)
+                logger.info(f"📥 Ответ: {data}")
 
-                # Поддержка двух форматов
-                if "free" in data and isinstance(data["free"], list):
-                    free = [str(t).strip() for t in data["free"]]
-                    return [t for t in free if t in working_slots]
-                elif "occupied" in data and isinstance(data["occupied"], list):
-                    occupied = {str(t).strip() for t in data["occupied"]}
-                    return [t for t in working_slots if t not in occupied]
-                else:
-                    logger.warning(f"⚠️ SLOTS_URL: нет 'free'/'occupied': {data}")
-                    return working_slots
+                # Поддержка формата Code.gs: {"slots": [{"Время":"10:00","status":"free"}, ...]}
+                if "slots" in data and isinstance(data["slots"], list):
+                    free_times = [
+                        str(item.get("Время", "")).strip()
+                        for item in data["slots"]
+                        if str(item.get("status", "")).lower() == "free"
+                    ]
+                    return [t for t in free_times if t in working_slots]
 
-    except asyncio.TimeoutError:
-        logger.error(f"⏱️ Таймаут SLOTS_URL для {date_iso}")
-        return working_slots
+                # Fallback
+                return working_slots
+
     except Exception as e:
-        logger.error(f"💥 Ошибка SLOTS_URL для {date_iso}: {e}")
+        logger.error(f"💥 SLOTS_URL error: {e}")
         return working_slots
 
 async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str):
-    """Отправляет бронирование. Возвращает {'status': 'ok' | 'error', 'message': ...}."""
     payload = {
         "Имя": name.strip(),
         "Телефон": phone.strip(),
@@ -145,32 +132,16 @@ async def send_booking(name: str, phone: str, service: str, date_display: str, t
         "Время": time_str,
         "ДлительностьЧасы": DURATION_MAP.get(service, 1.0)
     }
-    
     try:
-        timeout = aiohttp.ClientTimeout(total=12)
+        timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            logger.info(f"📩 Отправка брони: {payload}")
             async with session.post(BOOKING_URL, json=payload) as resp:
                 text = await resp.text()
-                logger.info(f"📬 Ответ BOOKING_URL ({resp.status}): {text[:150]}")
-                
                 if resp.status != 200:
-                    return {"status": "error", "message": f"Сервер недоступен ({resp.status})"}
-
-                try:
-                    result = json.loads(text)
-                    # Убедимся, что есть 'status'
-                    if "status" not in result:
-                        return {"status": "error", "message": "Некорректный ответ сервера"}
-                    return result
-                except json.JSONDecodeError:
-                    return {"status": "error", "message": "Сервер вернул не JSON"}
-
-    except asyncio.TimeoutError:
-        return {"status": "error", "message": "Сервер не отвечает (таймаут)"}
+                    return {"status": "error", "message": f"HTTP {resp.status}"}
+                return json.loads(text)
     except Exception as e:
-        logger.error(f"💥 send_booking ошибка: {e}")
-        return {"status": "error", "message": "Внутренняя ошибка"}
+        return {"status": "error", "message": str(e)}
 
 # === 4. ХЭНДЛЕРЫ ===
 @router.message(Command("start"))
@@ -185,99 +156,70 @@ async def start(msg: Message, state: FSMContext):
 @router.callback_query(F.data == "book")
 async def book(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Booking.choosing_service)
-    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP.keys()]
+    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP]
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
     await cb.message.edit_text("Выберите услугу:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("srv_"))
 async def srv(cb: CallbackQuery, state: FSMContext):
-    service = cb.data[4:]
-    await state.update_data(service=service)
+    await state.update_data(service=cb.data[4:])
     await state.set_state(Booking.entering_name)
     await cb.message.edit_text("Введите ваше имя:")
 
 @router.message(Booking.entering_name)
 async def name(msg: Message, state: FSMContext):
-    if not msg.text or not isinstance(msg.text, str) or not msg.text.strip():
-        await msg.answer("❌ Пожалуйста, введите ваше имя текстом (например, Айгерим).")
+    if not (msg.text and msg.text.strip()):
+        await msg.answer("❌ Введите имя текстом.")
         return
-
     name_clean = msg.text.strip()
     if len(name_clean) < 2:
-        await msg.answer("❌ Имя должно быть от 2 символов. Попробуйте снова:")
+        await msg.answer("❌ Имя от 2 символов.")
         return
-    if len(name_clean) > 50:
-        await msg.answer("❌ Имя слишком длинное (макс. 50 симв.). Попробуйте короче:")
-        return
-
     await state.update_data(name=name_clean)
     await state.set_state(Booking.entering_phone)
-    logger.info(f"👤 {msg.from_user.id} → имя: {name_clean}")
-    await msg.answer("📱 Введите ваш телефон (например, +7 777 123 4567):")
+    await msg.answer("📱 Введите телефон:")
 
 @router.message(Booking.entering_phone)
 async def phone(msg: Message, state: FSMContext):
-    if not msg.text or not isinstance(msg.text, str) or not msg.text.strip():
-        await msg.answer("❌ Пожалуйста, введите номер телефона текстом.")
+    if not (msg.text and msg.text.strip()):
+        await msg.answer("❌ Введите телефон текстом.")
         return
-
-    phone_clean = msg.text.strip()
-    digits = "".join(filter(str.isdigit, phone_clean))
-    if len(digits) < 8:
-        await msg.answer("❌ Номер слишком короткий. Введите, например: +7 777 123 4567")
-        return
-    if len(digits) > 15:
-        await msg.answer("❌ Номер слишком длинный.")
-        return
-
-    await state.update_data(phone=phone_clean)
+    await state.update_data(phone=msg.text.strip())
     await state.set_state(Booking.choosing_day)
 
     now = datetime.now(TZ).replace(tzinfo=None)
-    logger.info(f"📞 {msg.from_user.id} → телефон: {phone_clean}, локальное время: {now.strftime('%H:%M')}")
-
     buttons = []
     for i in range(14):
         day = now + timedelta(days=i)
-        if day.weekday() == 6:  # воскресенье
+        if day.weekday() == 6:
             continue
         if i == 0:
-            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
-            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
-            if not future_slots:
+            slots = await fetch_free_slots(day.strftime("%Y-%m-%d"))
+            future = [s for s in slots if s > now.strftime("%H:%M")]
+            if not future:
                 continue
         text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
 
     if not buttons:
-        await msg.answer("🕗 Свободных дней нет в ближайшие 2 недели. Попробуйте позже.")
+        await msg.answer("🕗 Нет свободных дней.")
         await state.clear()
         return
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await msg.answer("📅 Выберите день:", reply_markup=kb)
+    await msg.answer("📅 Выберите день:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
     date_iso = cb.data[4:]
     await state.update_data(date=date_iso)
-    await state.set_state(Booking.choosing_time)
-    
     slots = await fetch_free_slots(date_iso)
-    logger.info(f"📅 {date_iso} → свободные слоты: {slots}")
-
     if not slots:
-        await cb.message.edit_text("🕗 В этот день нет свободных слотов. Выберите другой день.")
+        await cb.message.edit_text("🕗 В этот день нет свободных слотов.")
         return
-
-    buttons = []
-    for i in range(0, len(slots), 3):
-        row = [InlineKeyboardButton(text=t, callback_data=f"time_{t}") for t in slots[i:i+3]]
-        buttons.append(row)
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="choose_day")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await cb.message.edit_text("Выберите время:", reply_markup=kb)
+    buttons = [[InlineKeyboardButton(t, callback_data=f"time_{t}") for t in slots[i:i+3]] for i in range(0, len(slots), 3)]
+    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="choose_day")])
+    await cb.message.edit_text("Выберите время:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("time_"))
 async def time(cb: CallbackQuery, state: FSMContext):
@@ -294,16 +236,15 @@ async def time(cb: CallbackQuery, state: FSMContext):
     time_str = cb.data[5:]
 
     if not all([service, name, phone, date_iso]):
-        await cb.message.edit_text("⚠️ Недостаточно данных. Начните с /start.")
+        await cb.message.edit_text("⚠️ Данные утеряны. /start")
         await state.clear()
         return
 
     try:
         dt = datetime.fromisoformat(date_iso)
         date_display = dt.strftime("%d.%m.%Y")
-    except Exception as e:
-        logger.error(f"📅 Ошибка даты: {e}")
-        await cb.message.edit_text("❌ Некорректная дата.")
+    except:
+        await cb.message.edit_text("❌ Ошибка даты.")
         await state.clear()
         return
 
@@ -311,21 +252,11 @@ async def time(cb: CallbackQuery, state: FSMContext):
 
     if result.get("status") == "ok":
         await cb.message.edit_text(f"✅ Запись подтверждена!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}")
-        await bot.send_message(
-            ADMIN_CHAT_ID,
-            f"🆕 Новая запись!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}\n👤 {name}\n📱 {phone}"
-        )
+        await bot.send_message(ADMIN_CHAT_ID, f"🆕 {service} | {name} | {phone} | {date_display} {time_str}")
         await state.clear()
-
-    elif result.get("status") == "busy":
-        # Очень редкий случай (гонка), но обрабатываем
-        await cb.message.edit_text("🕗 Слот только что заняли. Обновляю расписание...")
-        await asyncio.sleep(1)
-        await back_to_days(cb, state)
-
     else:
-        msg_err = result.get("message", "неизвестно")
-        await cb.message.edit_text(f"❌ Ошибка сервера: {msg_err}")
+        msg = result.get("message", "ошибка сервера")
+        await cb.message.edit_text(f"❌ {msg}")
         await state.clear()
 
 @router.callback_query(F.data == "contact")
@@ -335,10 +266,11 @@ async def contact(cb: CallbackQuery):
         "🕒 *Пн–Пт:* 10:00–12:30, 14:00–20:00\n"
         "🕒 *Сб:* 10:00–12:30, 14:00–18:00\n"
         "📱 +7 777 123 45 67"
+        "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
+        [InlineKeyboardButton("💬 WhatsApp", url="https://wa.me/77771234567")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="main")]
     ])
     await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
@@ -346,62 +278,28 @@ async def contact(cb: CallbackQuery):
 async def back_to_main(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
-        [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
+        [InlineKeyboardButton("📅 Записаться", callback_data="book")],
+        [InlineKeyboardButton("📞 Контакты", callback_data="contact")]
     ])
     await cb.message.edit_text("🌸 Добро пожаловать в ASEM PODO @ BEAUTY!", reply_markup=kb)
 
 @router.callback_query(F.data == "choose_day")
 async def back_to_days(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    required = {"service", "name", "phone"}
-    if not (required <= set(data.keys())):
-        await cb.message.edit_text("⚠️ Данные утеряны. Начните с /start.")
-        await state.clear()
-        return
+    await phone(cb.message, state)  # переиспользуем логику
 
-    now = datetime.now(TZ).replace(tzinfo=None)
-    buttons = []
-    for i in range(14):
-        day = now + timedelta(days=i)
-        if day.weekday() == 6:
-            continue
-        if i == 0:
-            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
-            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
-            if not future_slots:
-                continue
-        text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await cb.message.edit_text("Выберите день:", reply_markup=kb)
-
-# === 5. FASTAPI (для Render) ===
+# === 5. FASTAPI ===
 app = FastAPI()
 
 @app.on_event("startup")
 async def startup():
-    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
-    logger.info("✅ Бот запущен. Webhook установлен.")
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    try:
-        update = types.Update(**await request.json())
-        await dp.feed_update(bot, update)
-        return {"ok": True}
-    except Exception as e:
-        logger.error(f"🚨 Webhook error: {e}")
-        return {"ok": False, "error": str(e)}
+    update = types.Update(**await request.json())
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
 @app.get("/healthz")
-@app.head("/healthz")
 async def healthz():
-    return {"status": "ok"}
-
-@app.get("/")
-@app.head("/")
-async def root():
     return {"status": "ok"}
