@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command
 
 # === 0. ЛОГГИРОВАНИЕ ===
 logging.basicConfig(level=logging.INFO)
