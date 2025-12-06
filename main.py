@@ -21,29 +21,6 @@ logger = logging.getLogger(__name__)
 try:
     import zoneinfo
     TZ = zoneinfo.ZoneInfo("Asia/Almaty")
-except ImportError:# main.py — ASEM PODO (финальная версия для Render, 06.12.2025)
-# Совместим с aiogram 3.13+, Python 3.10+
-import os
-import json
-import logging
-from datetime import datetime, timedelta
-import asyncio
-import aiohttp
-from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, Router, F, types
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-
-# === 0. ЛОГГИРОВАНИЕ И ЧАСОВОЙ ПОЯС ===
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-try:
-    import zoneinfo
-    TZ = zoneinfo.ZoneInfo("Asia/Almaty")
 except ImportError:
     from datetime import timezone
     TZ = timezone(timedelta(hours=5))
