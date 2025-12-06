@@ -439,6 +439,77 @@ async def back_to_days(cb: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await cb.message.edit_text("📅 Выберите день:", reply_markup=kb)
 
+# === 6. КОМАНДЫ В МЕНЮ Telegram ===
+# Регистрируем команды один раз при старте
+async def set_bot_commands(bot: Bot):
+    from aiogram.types import BotCommand
+    commands = [
+        BotCommand(command="start", description="Запуск / Главное меню"),
+        BotCommand(command="book", description="Записаться на услугу"),
+        BotCommand(command="contact", description="Контакты и адрес"),
+        BotCommand(command="cancel", description="Отменить действие"),
+        BotCommand(command="help", description="Помощь"),
+    ]
+    await bot.set_my_commands(commands)
+    logger.info("✅ Команды установлены в меню")
+
+# Хэндлеры для команд
+@router.message(Command("start"))
+async def cmd_start(msg: Message, state: FSMContext):
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
+    ])
+    await msg.answer("🌸 Добро пожаловать в ASEM PODO @ BEAUTY!", reply_markup=kb)
+
+@router.message(Command("book"))
+async def cmd_book(msg: Message, state: FSMContext):
+    await state.clear()
+    # Эмулируем callback_query с data="book"
+    fake_cb = CallbackQuery(
+        id="cmd",
+        from_user=msg.from_user,
+        chat=msg.chat,
+        message=msg,
+        data="book",
+        chat_instance="",
+    )
+    await book(fake_cb, state)
+
+@router.message(Command("contact"))
+async def cmd_contact(msg: Message, state: FSMContext):
+    await state.clear()
+    fake_cb = CallbackQuery(
+        id="cmd",
+        from_user=msg.from_user,
+        chat=msg.chat,
+        message=msg,
+        data="contact",
+        chat_instance="",
+    )
+    await contact(fake_cb, state)
+
+@router.message(Command("cancel"))
+async def cmd_cancel(msg: Message, state: FSMContext):
+    await state.clear()
+    await msg.answer("🛑 Действие отменено. Вы в главном меню.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
+    ]))
+
+@router.message(Command("help"))
+async def cmd_help(msg: Message, state: FSMContext):
+    text = (
+        "💡 Как пользоваться ботом:\n"
+        "1. Нажмите /book или «📅 Записаться»\n"
+        "2. Выберите услугу → введите имя и телефон\n"
+        "3. Выберите день и время\n\n"
+        "⚠️ Если бот «молчит» — нажмите /start (особенно вечером)\n"
+        "📞 Срочная связь: /contact"
+    )
+    await msg.answer(text, parse_mode="Markdown")
+
 # === 6. FASTAPI (для Render) ===
 app = FastAPI()
 
