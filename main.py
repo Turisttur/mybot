@@ -402,7 +402,42 @@ async def back_to_main(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "choose_day")
 async def back_to_days(cb: CallbackQuery, state: FSMContext):
-    await phone(cb.message, state)
+    # Восстанавливаем данные
+    data = await state.get_data()
+    required = {"service", "name", "phone"}
+    if not (required <= set(data.keys())):
+        await cb.message.edit_text("⚠️ Данные утеряны. Начните с /start.")
+        await state.clear()
+        return
+
+    # Копируем логику из phone(), но без запроса телефона
+    now = datetime.now(TZ).replace(tzinfo=None)
+    buttons = []
+    for i in range(7):
+        day = now + timedelta(days=i)
+        if day.weekday() == 6:  # воскресенье — пропускаем
+            continue
+        if i == 0:
+            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
+            current_time_str = now.strftime("%H:%M")
+            future_slots = [s for s in slots_today if s > current_time_str]
+            if not future_slots:
+                continue
+        text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
+        buttons.append([
+            InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")
+        ])
+
+    if not buttons:
+        await cb.message.edit_text("🕗 Нет свободных дней в ближайшую неделю.")
+        await state.clear()
+        return
+
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="main")
+    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await cb.message.edit_text("📅 Выберите день:", reply_markup=kb)
 
 # === 6. FASTAPI (для Render) ===
 app = FastAPI()
