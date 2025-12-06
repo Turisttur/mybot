@@ -1,9 +1,9 @@
-# bot.py — ASEM PODO (финал: 06.12.2025)
-# Полностью совместим с Code.gs выше
+# main.py — ASEM PODO (финальная версия, 06.12.2025)
+# Для Render: aiogram 3.13+, Python 3.10+
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import aiohttp
 from fastapi import FastAPI, Request
@@ -14,18 +14,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# === 0. ЛОГГИРОВАНИЕ И ЧАСОВОЙ ПОЯС ===
+# === 0. ЛОГГИРОВАНИЕ ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === 1. ЧАСОВОЙ ПОЯС (Asia/Almaty) ===
 try:
     import zoneinfo
     TZ = zoneinfo.ZoneInfo("Asia/Almaty")
 except ImportError:
-    from datetime import timezone
     TZ = timezone(timedelta(hours=5))
 
-# === 1. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
+# === 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
@@ -49,7 +49,7 @@ DURATION_MAP = {
     "Визаж Макияж": 1.5
 }
 
-# === 2. ИНИЦИАЛИЗАЦИЯ ===
+# === 3. ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
@@ -62,14 +62,14 @@ class Booking(StatesGroup):
     choosing_day = State()
     choosing_time = State()
 
-# === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+# === 4. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
-    """Генерирует слоты: 10:00–12:00, 14:00–19:30 (пн–пт), 14:00–17:30 (сб)."""
+    """Генерирует слоты только в рабочее время: 10:00–12:00, 14:00–19:30 (пн–пт), 14:00–17:30 (сб)."""
     day = datetime.fromisoformat(date_iso)
     wd = day.weekday()  # 0=пн, 6=вс
     if wd == 6:  # воскресенье — выходной
         return []
-    
+
     slots = []
     # Утро: 10:00 → 12:00 (12:30 — перерыв!)
     current = day.replace(hour=10, minute=0, second=0, microsecond=0)
@@ -77,18 +77,19 @@ def get_working_slots(date_iso: str) -> list[str]:
     while current < end:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
-    
-    # Вечер: до 20:00 (пн–пт) или 18:00 (сб)
+
+    # Вечер: до 20:00 (пн–пт) или 18:00 (сб) → последний слот: 19:30 / 17:30
     end_hour = 20 if wd < 5 else 18
     current = day.replace(hour=14, minute=0, second=0, microsecond=0)
     end = day.replace(hour=end_hour, minute=0)
     while current < end:
         slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
-    
+
     return slots
 
 async def fetch_free_slots(date_iso: str) -> list[str]:
+    """Возвращает ТОЛЬКО свободные слоты для указанной даты (фильтрация по date_iso)."""
     working_slots = get_working_slots(date_iso)
     if not working_slots or not SLOTS_URL:
         return working_slots
@@ -103,20 +104,26 @@ async def fetch_free_slots(date_iso: str) -> list[str]:
                 if resp.status != 200:
                     logger.error(f"❌ SLOTS_URL {resp.status}: {text[:120]}")
                     return working_slots
+
                 data = json.loads(text)
-                logger.info(f"📥 Ответ: {len(data.get('slots', []))} слотов")
+                logger.info(f"📥 Ответ: {len(data.get('slots', []))} записей")
 
-                # Поддержка формата: {"slots": [{"Время":"10:00","status":"free"}, ...]}
+                # 🔹 ФИЛЬТРАЦИЯ: только слоты с Дата == date_iso и status == 'free'
+                free_times = []
                 if "slots" in data and isinstance(data["slots"], list):
-                    free_times = [
-                        str(item.get("Время", "")).strip()
-                        for item in data["slots"]
-                        if str(item.get("status", "")).lower() == "free"
-                    ]
-                    # Фильтруем по рабочему времени (защита от мусора)
-                    return [t for t in free_times if t in working_slots]
+                    for item in data["slots"]:
+                        slot_date = str(item.get("Дата", "")).strip()
+                        slot_time = str(item.get("Время", "")).strip()
+                        status = str(item.get("status", "")).lower()
+                        if slot_date == date_iso and status == "free":
+                            free_times.append(slot_time)
 
-                return working_slots
+                # Если данных нет — возвращаем рабочие слоты как fallback
+                if not free_times:
+                    return working_slots
+
+                # Фильтруем по рабочему расписанию (защита от мусора)
+                return [t for t in free_times if t in working_slots]
 
     except Exception as e:
         logger.error(f"💥 Ошибка SLOTS_URL: {e}")
@@ -142,7 +149,7 @@ async def send_booking(name: str, phone: str, service: str, date_display: str, t
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# === 4. ХЭНДЛЕРЫ ===
+# === 5. ХЭНДЛЕРЫ ===
 @router.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
     await state.clear()
@@ -194,13 +201,16 @@ async def phone(msg: Message, state: FSMContext):
 
     now = datetime.now(TZ).replace(tzinfo=None)
     buttons = []
-    for i in range(14):
+
+    # 🔹 ТОЛЬКО 7 ДНЕЙ (без воскресенья)
+    for i in range(7):
         day = now + timedelta(days=i)
         if day.weekday() == 6:  # воскресенье — пропускаем
             continue
         if i == 0:
             slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
-            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
+            current_time_str = now.strftime("%H:%M")
+            future_slots = [s for s in slots_today if s > current_time_str]
             if not future_slots:
                 continue
         text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
@@ -209,7 +219,7 @@ async def phone(msg: Message, state: FSMContext):
         ])
 
     if not buttons:
-        await msg.answer("🕗 Нет свободных дней.")
+        await msg.answer("🕗 Нет свободных дней в ближайшую неделю.")
         await state.clear()
         return
 
@@ -221,18 +231,18 @@ async def phone(msg: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("day_"))
 async def day(cb: CallbackQuery, state: FSMContext):
-    date_iso = cb.data[4:]
+    date_iso = cb.data[4:]  # напр. "2025-12-06"
     await state.update_data(date=date_iso)
     await state.set_state(Booking.choosing_time)
 
     slots = await fetch_free_slots(date_iso)
-    logger.info(f"📅 {date_iso} → слотов: {len(slots)}")
+    logger.info(f"📅 {date_iso} → свободные слоты: {slots}")
 
     if not slots:
-        await cb.message.edit_text("🕗 В этот день нет свободных слотов. Выберите другой день.")
+        await cb.message.edit_text("🕗 В этот день нет свободных слотов.")
         return
 
-    # Генерация кнопок по 3 в ряд
+    # 🔹 Кнопки по 3 в ряд
     buttons = []
     for i in range(0, len(slots), 3):
         row = [
@@ -295,6 +305,7 @@ async def contact(cb: CallbackQuery):
         "🕒 *Пн–Пт:* 10:00–12:30, 14:00–20:00\n"
         "🕒 *Сб:* 10:00–12:30, 14:00–18:00\n"
         "📱 +7 777 123 45 67"
+        "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
@@ -313,35 +324,9 @@ async def back_to_main(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "choose_day")
 async def back_to_days(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    required = {"service", "name", "phone"}
-    if not (required <= set(data.keys())):
-        await cb.message.edit_text("⚠️ Данные утеряны. Начните с /start.")
-        await state.clear()
-        return
+    await phone(cb.message, state)
 
-    now = datetime.now(TZ).replace(tzinfo=None)
-    buttons = []
-    for i in range(14):
-        day = now + timedelta(days=i)
-        if day.weekday() == 6:
-            continue
-        if i == 0:
-            slots_today = await fetch_free_slots(day.strftime("%Y-%m-%d"))
-            future_slots = [s for s in slots_today if s > now.strftime("%H:%M")]
-            if not future_slots:
-                continue
-        text = "Сегодня" if i == 0 else "Завтра" if i == 1 else day.strftime("%d %b")
-        buttons.append([
-            InlineKeyboardButton(text=text, callback_data=f"day_{day.strftime('%Y-%m-%d')}")
-        ])
-    buttons.append([
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="main")
-    ])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await cb.message.edit_text("Выберите день:", reply_markup=kb)
-
-# === 5. FASTAPI (для Render) ===
+# === 6. FASTAPI (Render) ===
 app = FastAPI()
 
 @app.on_event("startup")
