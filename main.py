@@ -28,6 +28,45 @@ try:
 except ImportError:
     TZ = timezone(timedelta(hours=5))
 
+
+
+# === 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
+SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
+BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
+
+if not BOT_TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN не задан")
+if not BOOKING_URL:
+    raise RuntimeError("❌ BOOKING_URL не задан")
+if not WEBHOOK_URL:
+    raise RuntimeError("❌ WEBHOOK_URL не задан")
+
+DURATION_MAP = {
+    "Медицинская подология": 2.0,
+    "Эстетический маникюр": 2.0,
+    "Педикюр премиум": 2.0,
+    "Наращивание ресниц": 1.0,
+    "Коррекция бровей": 0.5,
+    "Прокалывание ушей": 0.5,
+    "Визаж Макияж": 1.5
+}
+
+# === 3. ИНИЦИАЛИЗАЦИЯ ===
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+router = Router()
+dp.include_router(router)
+
+class Booking(StatesGroup):
+    choosing_service = State()
+    entering_name = State()
+    entering_phone = State()
+    choosing_day = State()
+    choosing_time = State()
+
 # === 6. КОМАНДЫ В МЕНЮ Telegram ===
 # Регистрируем команды один раз при старте
 async def set_bot_commands(bot: Bot):
@@ -98,43 +137,6 @@ async def cmd_help(msg: Message, state: FSMContext):
         "📞 Срочная связь: /contact"
     )
     await msg.answer(text, parse_mode="Markdown")
-
-# === 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-SLOTS_URL = os.getenv("SLOTS_URL", "").strip()
-BOOKING_URL = os.getenv("BOOKING_URL", "").strip()
-
-if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN не задан")
-if not BOOKING_URL:
-    raise RuntimeError("❌ BOOKING_URL не задан")
-if not WEBHOOK_URL:
-    raise RuntimeError("❌ WEBHOOK_URL не задан")
-
-DURATION_MAP = {
-    "Медицинская подология": 2.0,
-    "Эстетический маникюр": 2.0,
-    "Педикюр премиум": 2.0,
-    "Наращивание ресниц": 1.0,
-    "Коррекция бровей": 0.5,
-    "Прокалывание ушей": 0.5,
-    "Визаж Макияж": 1.5
-}
-
-# === 3. ИНИЦИАЛИЗАЦИЯ ===
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-router = Router()
-dp.include_router(router)
-
-class Booking(StatesGroup):
-    choosing_service = State()
-    entering_name = State()
-    entering_phone = State()
-    choosing_day = State()
-    choosing_time = State()
 
 # === 4. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_working_slots(date_iso: str) -> list[str]:
