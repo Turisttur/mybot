@@ -1,5 +1,5 @@
-# main.py — ASEM PODO (финал: 06.12.2025)
-# ✅ Все фиксы, включая команды без "фейков", get_service_keyboard(), и защиту от cold start
+# main.py — ASEM PODO (финал: 07.12.2025)
+# ✅ Все фичи: поиск, отмена, напоминания, отзывы — без ошибок
 import os
 import json
 import logging
@@ -25,7 +25,7 @@ try:
 except ImportError:
     TZ = timezone(timedelta(hours=5))
 
-# === 2. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
+# === 2. ПЕРЕМЕННЫЕ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "6734540756"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
@@ -50,22 +50,21 @@ DURATION_MAP = {
 }
 
 # === 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
-def get_service_keyboard():
-    """Единый источник правды для клавиатуры выбора услуги"""
-    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP]
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 def get_main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Записаться", callback_data="book")],
         [InlineKeyboardButton(text="📞 Контакты", callback_data="contact")]
     ])
 
+def get_service_keyboard():
+    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_working_slots(date_iso: str) -> list[str]:
     day = datetime.fromisoformat(date_iso)
     wd = day.weekday()
-    if wd == 6:  # воскресенье
+    if wd == 6:
         return []
     slots = []
     current = day.replace(hour=10, minute=0)
@@ -102,38 +101,60 @@ async def fetch_free_slots(date_iso: str) -> list[str]:
         logger.error(f"💥 fetch_free_slots: {e}")
         return working_slots
 
-async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str):
-    payload = {
-        "Имя": name.strip(),
-        "Телефон": phone.strip(),
-        "Услуга": service.strip(),
-        "Дата": date_display,
-        "Время": time_str,
-        "ДлительностьЧасы": DURATION_MAP.get(service, 1.0)
-    }
+async def search_booking(phone: str):
     try:
-        timeout = aiohttp.ClientTimeout(total=10)
+        url = f"{BOOKING_URL}?action=find&phone={phone}"
+        timeout = aiohttp.ClientTimeout(total=6)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(BOOKING_URL, json=payload) as resp:
-                return await resp.json()
+            async with session.get(url) as resp:
+                data = await resp.json()
+                return data.get("booking") if data.get("status") == "ok" else None
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.error(f"🔍 Поиск по телефону: {e}")
+        return None
+
+async def search_bookings_by_name(name: str):
+    try:
+        url = f"{BOOKING_URL}?action=find&name={name}"
+        timeout = aiohttp.ClientTimeout(total=6)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                return data.get("bookings", []) if data.get("status") == "ok" else []
+    except Exception as e:
+        logger.error(f"🔍 Поиск по имени: {e}")
+        return []
+
+async def delete_booking(phone: str):
+    try:
+        url = f"{BOOKING_URL}?action=delete&phone={phone}"
+        timeout = aiohttp.ClientTimeout(total=6)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                return data.get("status") == "ok"
+    except Exception as e:
+        logger.error(f"🗑 Удаление: {e}")
+        return False
 
 # === 4. ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-router = Router()  # ✅ До хэндлеров
+router = Router()
 dp.include_router(router)
 
-# === 5. STATE MACHINE ===
+# === 5. FSM ===
 class Booking(StatesGroup):
     choosing_service = State()
     entering_name = State()
     entering_phone = State()
     choosing_day = State()
     choosing_time = State()
+    canceling = State()
+    finding_by_name = State()
+    finding_by_phone = State()
 
-# === 6. КОМАНДЫ — САМЫЕ ПЕРВЫЕ ===
+# === 6. КОМАНДЫ ===
 @router.message(Command("start"))
 async def cmd_start(msg: Message, state: FSMContext):
     await state.clear()
@@ -161,6 +182,21 @@ async def cmd_contact(msg: Message, state: FSMContext):
     ])
     await msg.answer(text, parse_mode="Markdown", reply_markup=kb)
 
+@router.message(Command("cancelbooking"))
+async def cmd_cancelbooking(msg: Message, state: FSMContext):
+    await state.set_state(Booking.canceling)
+    await msg.answer("📱 Введите телефон, чтобы отменить запись:")
+
+@router.message(Command("mybooking"))
+async def cmd_mybooking(msg: Message, state: FSMContext):
+    await state.set_state(Booking.finding_by_phone)
+    await msg.answer("📱 Введите телефон (как при записи):")
+
+@router.message(Command("findbooking"))
+async def cmd_findbooking(msg: Message, state: FSMContext):
+    await state.set_state(Booking.finding_by_name)
+    await msg.answer("👤 Введите имя (как при записи):")
+
 @router.message(Command("cancel"))
 async def cmd_cancel(msg: Message, state: FSMContext):
     await state.clear()
@@ -168,14 +204,14 @@ async def cmd_cancel(msg: Message, state: FSMContext):
 
 @router.message(Command("help"))
 async def cmd_help(msg: Message):
-    text = (
+    await msg.answer(
         "💡 Как пользоваться:\n"
-        "1. Нажмите /book или «📅 Записаться»\n"
-        "2. Выберите услугу → имя → телефон\n"
-        "3. Выберите день и время (только свободные)\n\n"
-        "⚠️ Если бот «молчит» — нажмите /start (особенно вечером)"
+        "/book — записаться\n"
+        "/mybooking — посмотреть запись\n"
+        "/cancelbooking — отменить запись\n"
+        "/findbooking — найти по имени",
+        parse_mode="Markdown"
     )
-    await msg.answer(text, parse_mode="Markdown")
 
 # === 7. CALLBACK ХЭНДЛЕРЫ ===
 @router.callback_query(F.data == "book")
@@ -274,7 +310,10 @@ async def time(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    result = await send_booking(name, phone, service, date_display, time_str)
+    # Сохраняем chat_id для напоминаний
+    chat_id = cb.message.chat.id
+
+    result = await send_booking(name, phone, service, date_display, time_str, chat_id)
 
     if result.get("status") == "ok":
         await cb.message.edit_text(f"✅ Запись подтверждена!\n📅 {date_display}\n⏰ {time_str}\n💅 {service}")
@@ -322,7 +361,8 @@ async def suggest_time(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_text("⚠️ Сессия устарела. /start")
         await state.clear()
         return
-    result = await send_booking(data["name"], data["phone"], data["service"], date_display, time_str)
+    chat_id = cb.message.chat.id
+    result = await send_booking(data["name"], data["phone"], data["service"], date_display, time_str, chat_id)
     if result.get("status") == "ok":
         await cb.message.edit_text(f"✅ Запись подтверждена!\n📅 {date_display}\n⏰ {time_str}")
         await bot.send_message(ADMIN_CHAT_ID, f"🆕 {data['service']} | {data['name']} | {data['phone']} | {date_display} {time_str}")
@@ -357,11 +397,11 @@ async def back_to_days(cb: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await cb.message.edit_text("📅 Выберите день:", reply_markup=kb)
 
-# === 8. FSM ХЭНДЛЕРЫ — ПОСЛЕДНИМИ ===
+# === 8. FSM ХЭНДЛЕРЫ ===
 @router.message(Booking.entering_name)
 async def name(msg: Message, state: FSMContext):
     if msg.text and msg.text.startswith("/"):
-        return  # команда обработается выше
+        return
     if not (msg.text and msg.text.strip()):
         await msg.answer("❌ Введите имя текстом.")
         return
@@ -410,24 +450,112 @@ async def phone(msg: Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await msg.answer("📅 Выберите день:", reply_markup=kb)
 
-# === 9. FASTAPI ===
+@router.message(Booking.canceling)
+async def cancel_by_phone(msg: Message, state: FSMContext):
+    if msg.text and msg.text.startswith("/"):
+        return
+    phone = msg.text.strip()
+    success = await delete_booking(phone)
+    if success:
+        await msg.answer("✅ Запись отменена.")
+    else:
+        await msg.answer("❌ Не удалось отменить. Проверьте номер.")
+    await state.clear()
+
+@router.message(Booking.finding_by_phone)
+async def find_by_phone(msg: Message, state: FSMContext):
+    if msg.text and msg.text.startswith("/"):
+        return
+    phone = msg.text.strip()
+    booking = await search_booking(phone)
+    if booking:
+        text = f"📅 Ваша запись:\n{booking['date']} в {booking['time']}\n💅 {booking['service']}"
+        await msg.answer(text)
+    else:
+        await msg.answer("❌ Запись не найдена.")
+    await state.clear()
+
+@router.message(Booking.finding_by_name)
+async def find_by_name(msg: Message, state: FSMContext):
+    if msg.text and msg.text.startswith("/"):
+        return
+    name = msg.text.strip()
+    bookings = await search_bookings_by_name(name)
+    if bookings:
+        text = "📋 Найдено:\n" + "\n".join(
+            f"• {b['date']} в {b['time']} — {b['service']}" for b in bookings[:5]
+        )
+        await msg.answer(text)
+    else:
+        await msg.answer("❌ Записи не найдены.")
+    await state.clear()
+
+# === 9. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+async def send_booking(name: str, phone: str, service: str, date_display: str, time_str: str, chat_id: int):
+    payload = {
+        "Имя": name.strip(),
+        "Телефон": phone.strip(),
+        "Услуга": service.strip(),
+        "Дата": date_display,
+        "Время": time_str,
+        "ДлительностьЧасы": DURATION_MAP.get(service, 1.0),
+        "chat_id": chat_id  # ← для напоминаний
+    }
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(BOOKING_URL, json=payload) as resp:
+                return await resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# === 10. FASTAPI ===
 app = FastAPI()
 
 @app.on_event("startup")
 async def startup():
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
-    logger.info("✅ Бот запущен. Webhook установлен.")
+    logger.info("✅ Бот запущен.")
 
 @app.post("/webhook")
 async def webhook(request: Request):
+    update = types.Update(**await request.json())
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
+@app.post("/remind")
+async def remind_handler(request: Request):
+    data = await request.json()
+    text = f"🔔 Напоминание!\nЧерез час у вас запись:\n📅 {data['date']} в {data['time']}\n💅 {data['service']}"
     try:
-        update = types.Update(**await request.json())
-        await dp.feed_update(bot, update)
-        return {"ok": True}
+        await bot.send_message(chat_id=data["chat_id"], text=text)
     except Exception as e:
-        logger.error(f"🚨 Webhook error: {e}")
-        return {"ok": False, "error": str(e)}
+        logger.error(f"📩 Не удалось отправить напоминание: {e}")
+    return {"ok": True}
+
+@app.post("/review")
+async def review_handler(request: Request):
+    data = await request.json()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐️⭐️⭐️⭐️⭐️", callback_data="review_5")],
+        [InlineKeyboardButton(text="⭐️⭐️⭐️⭐️", callback_data="review_4")],
+        [InlineKeyboardButton(text="⭐️⭐️⭐️", callback_data="review_3")],
+    ])
+    try:
+        await bot.send_message(
+            chat_id=data["chat_id"],
+            text="✨ Спасибо за визит! Оцените, пожалуйста, сервис:",
+            reply_markup=kb
+        )
+    except Exception as e:
+        logger.error(f"📩 Не удалось отправить отзыв: {e}")
+    return {"ok": True}
+
+@router.callback_query(F.data.startswith("review_"))
+async def review_cb(cb: CallbackQuery):
+    stars = cb.data.split("_")[1]
+    await cb.message.edit_text(f"🙏 Спасибо за оценку: {stars}⭐!")
 
 @app.get("/healthz")
 @app.head("/healthz")
