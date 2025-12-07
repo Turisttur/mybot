@@ -204,14 +204,17 @@ async def cmd_cancel(msg: Message, state: FSMContext):
 
 @router.message(Command("help"))
 async def cmd_help(msg: Message):
-    await msg.answer(
+    text = (
         "💡 Как пользоваться:\n"
-        "/book — записаться\n"
-        "/mybooking — посмотреть запись\n"
-        "/cancelbooking — отменить запись\n"
-        "/findbooking — найти по имени",
-        parse_mode="Markdown"
+        "/start — Главное меню\n"
+        "/book — Записаться\n"
+        "/mybooking — Посмотреть запись (по телефону)\n"
+        "/cancelbooking — Отменить запись\n"
+        "/findbooking — Найти запись по имени\n"
+        "/contact — Контакты\n\n"
+        "⚠️ Если бот «молчит» — нажмите /start"
     )
+    await msg.answer(text, parse_mode="Markdown")
 
 # === 7. CALLBACK ХЭНДЛЕРЫ ===
 @router.callback_query(F.data == "book")
