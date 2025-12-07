@@ -94,29 +94,27 @@ async def cmd_start(msg: Message, state: FSMContext):
 @router.message(Command("book"))
 async def cmd_book(msg: Message, state: FSMContext):
     await state.clear()
-    # Эмулируем callback_query с data="book"
-    fake_cb = CallbackQuery(
-        id="cmd",
-        from_user=msg.from_user,
-        chat=msg.chat,
-        message=msg,
-        data="book",
-        chat_instance="",
-    )
-    await book(fake_cb, state)
+    await state.set_state(Booking.choosing_service)
+    buttons = [[InlineKeyboardButton(text=t, callback_data=f"srv_{t}")] for t in DURATION_MAP]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await msg.answer("Выберите услугу:", reply_markup=kb)
 
 @router.message(Command("contact"))
 async def cmd_contact(msg: Message, state: FSMContext):
     await state.clear()
-    fake_cb = CallbackQuery(
-        id="cmd",
-        from_user=msg.from_user,
-        chat=msg.chat,
-        message=msg,
-        data="contact",
-        chat_instance="",
+    text = (
+        "📍 *Аягоз, ул. Актамберды, 23*\n"
+        "🕒 *Пн–Пт:* 10:00–12:30, 14:00–20:00\n"
+        "🕒 *Сб:* 10:00–12:30, 14:00–18:00\n"
+        "📱 +7 777 123 45 67"
+        "🌐 [asem-podo.pages.dev](https://asem-podo.pages.dev)"
     )
-    await contact(fake_cb, state)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 WhatsApp", url="https://wa.me/77771234567")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main")]
+    ])
+    await msg.answer(text, parse_mode="Markdown", reply_markup=kb)
 
 @router.message(Command("cancel"))
 async def cmd_cancel(msg: Message, state: FSMContext):
